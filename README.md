@@ -1,2 +1,24 @@
-# seedance-ai-studio
-Beautiful Seedance 2.0 AI video generator - Upload your photo, select a prompt, get amazing AI videos with 3D liquid effects and mosaic animations
+# Seedance AI Studio
+
+Визуальная Pinterest-style библиотека промтов для Seedance: карточки с fashion, брендами, 3D-товарами, liquid/mosaic effects, cinematic, anime и UGC.
+
+## Как открыть
+
+1. Открой репозиторий на GitHub.
+2. Нажми `index.html`.
+3. Нажми кнопку **Raw** или скачай файл через **Download raw file**.
+4. Открой `index.html` двойным кликом в браузере.
+
+## Как пользоваться
+
+- Выбирай категорию слева или чипы сверху.
+- Ищи по бренду, эффекту или названию.
+- Нажми на карточку, чтобы открыть полный промт.
+- Нажми `Copy prompt`.
+- Загрузку фото можно использовать как напоминание: само AI-генерирование выполняется в Seedance или другом подключённом сервисе.
+- Избранное сохраняется в LocalStorage браузера.
+
+## GitHub Pages
+
+Для публикации сайта: Settings → Pages → Deploy from a branch → `main` → `/ (root)` → Save.
+Через некоторое время GitHub покажет публичный адрес сайта.
