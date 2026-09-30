@@ -1,0 +1,530 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0c0d11">
+  <meta name="description" content="Explore cinematic Seedance 2.0 prompts, save your favorites, and preview ideas with your own photo.">
+  <title>Seedance Studio — Prompt Library</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0c0d11;
+      --panel: #13151b;
+      --panel-2: #191b23;
+      --line: rgba(255,255,255,.08);
+      --muted: #8a8d99;
+      --text: #f4f4f7;
+      --lime: #d5ff67;
+      --purple: #a78bfa;
+      --sidebar: 250px;
+      font-family: "DM Sans", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); min-height: 100vh; }
+    button, input { font: inherit; }
+    button { color: inherit; }
+    .app { min-height: 100vh; }
+    .sidebar {
+      width: var(--sidebar); position: fixed; inset: 0 auto 0 0; z-index: 5;
+      display: flex; flex-direction: column; padding: 26px 18px 20px;
+      background: #101116; border-right: 1px solid var(--line);
+    }
+    .brand { display:flex; align-items:center; gap:11px; padding:0 8px 28px; }
+    .brand-mark { width:34px; height:34px; border-radius:11px; display:grid; place-items:center; background:linear-gradient(145deg,#d5ff67,#8cffa7); color:#10130b; box-shadow:0 0 25px #caff6340; }
+    .brand-mark svg { width:19px; }
+    .brand-name { font:700 16px "Space Grotesk",sans-serif; letter-spacing:-.5px; }
+    .brand-name span { color:var(--lime); }
+    .nav-label { color:#666a76; text-transform:uppercase; letter-spacing:1.3px; font-size:10px; font-weight:700; padding:0 10px; margin:10px 0 9px; }
+    .nav-link { border:0; background:transparent; color:#a4a6af; border-radius:10px; padding:10px; width:100%; display:flex; align-items:center; gap:11px; text-align:left; cursor:pointer; font-size:13px; transition:.2s ease; }
+    .nav-link:hover,.nav-link.active { color:#f5f5f7; background:#ffffff0b; }
+    .nav-link.active { box-shadow:inset 2px 0 var(--lime); }
+    .nav-icon { width:18px; height:18px; display:inline-grid; place-items:center; font-size:15px; flex:none; }
+    .nav-count { margin-left:auto; color:#777b87; font-size:11px; }
+    .sidebar-spacer { flex:1; }
+    .side-upload { border:1px solid #34373f; background:linear-gradient(145deg,#1b1d25,#14161b); border-radius:14px; padding:15px; margin:14px 2px; }
+    .side-upload strong { display:block; font:600 13px "Space Grotesk",sans-serif; margin-bottom:5px; }
+    .side-upload p { color:var(--muted); font-size:11px; line-height:1.5; margin:0 0 12px; }
+    .side-upload button { border:0; background:var(--lime); color:#11140a; border-radius:8px; width:100%; font-size:12px; font-weight:700; padding:9px; cursor:pointer; }
+    .profile { border-top:1px solid var(--line); padding:16px 7px 0; display:flex; align-items:center; gap:10px; }
+    .avatar { width:31px;height:31px;border-radius:50%;display:grid;place-items:center;background:linear-gradient(135deg,#8e67ff,#ff80ab);font-size:12px;font-weight:700; }
+    .profile div:nth-child(2) { font-size:12px; font-weight:600; }
+    .profile small { display:block; color:var(--muted); font-size:10px; margin-top:2px; }
+    .main { margin-left:var(--sidebar); min-height:100vh; }
+    .topbar { height:76px; display:flex; align-items:center; justify-content:space-between; gap:20px; padding:0 42px; border-bottom:1px solid var(--line); position:sticky; top:0; z-index:4; background:#0c0d11eF; backdrop-filter:blur(16px); }
+    .crumb { color:#8f929d; font-size:12px; }
+    .crumb b { color:#eff0f2; font-weight:600; }
+    .top-actions { display:flex; align-items:center; gap:11px; }
+    .search { width:min(310px,28vw); height:38px; border:1px solid #282a32; border-radius:10px; display:flex; gap:9px; align-items:center; padding:0 12px; color:#7e818c; background:#14161b; }
+    .search svg { width:15px; flex:none; }
+    .search input { color:#f5f5f7; outline:0; border:0; background:transparent; width:100%; font-size:12px; }
+    .search input::placeholder { color:#777a85; }
+    .kbd { font-size:10px; color:#686b76; border:1px solid #30323a; padding:2px 5px; border-radius:4px; white-space:nowrap; }
+    .icon-btn { display:grid;place-items:center;width:37px;height:37px;border-radius:10px;background:#15171d;border:1px solid #292b34;color:#b9bbc3;cursor:pointer; }
+    .icon-btn:hover { border-color:#565a64;color:#fff; }
+    .content { max-width:1500px; margin:0 auto; padding:33px 42px 70px; }
+    .hero { position:relative; min-height:250px; padding:34px 38px; border:1px solid #282b32; border-radius:20px; overflow:hidden; display:flex; align-items:center; background:linear-gradient(110deg,#171922 0%,#1b1922 48%,#211b2b 100%); }
+    .hero::before { content:""; width:480px;height:340px; position:absolute;right:8%;top:-115px;border-radius:50%;background:radial-gradient(ellipse,#9a66ff37 0%,#6f42b320 34%,transparent 69%);filter:blur(8px); }
+    .hero::after { content:"";position:absolute;right:0;bottom:0;width:52%;height:100%;opacity:.6;background:linear-gradient(135deg,transparent 15%,#d5ff6707 15.2%,transparent 15.8%,transparent 50%,#aa86ff0a 50.2%,transparent 50.7%);pointer-events:none; }
+    .hero-copy { position:relative; z-index:1; max-width:630px; }
+    .eyebrow { display:inline-flex; align-items:center; gap:7px; border:1px solid #cfff6733; color:#d9ffa0; background:#cfff670c; border-radius:30px; padding:6px 10px; font-size:10px; font-weight:700; letter-spacing:.4px; text-transform:uppercase; }
+    .eyebrow i { width:6px;height:6px;border-radius:50%;background:var(--lime);box-shadow:0 0 10px var(--lime); }
+    h1 { font:600 clamp(30px,4vw,48px)/1.08 "Space Grotesk",sans-serif; letter-spacing:-2px; margin:16px 0 10px; max-width:590px; }
+    h1 span { color:var(--lime); }
+    .hero-copy p { color:#a9aab4; max-width:490px; line-height:1.6; font-size:13px; margin:0 0 21px; }
+    .hero-buttons { display:flex; gap:10px; align-items:center; }
+    .primary-btn,.secondary-btn { border-radius:9px; padding:10px 14px; font-size:12px; font-weight:700; cursor:pointer; transition:.2s; }
+    .primary-btn { border:0; background:var(--lime); color:#11140a; box-shadow:0 5px 22px #d5ff6718; }
+    .primary-btn:hover { transform:translateY(-2px); box-shadow:0 7px 26px #d5ff6738; }
+    .secondary-btn { border:1px solid #41434c; background:#ffffff07; color:#e7e7ec; }
+    .secondary-btn:hover { background:#ffffff10; }
+    .hero-art { position:absolute;right:5%;top:50%;transform:translateY(-50%);width:290px;height:205px;perspective:600px; }
+    .art-card { position:absolute;overflow:hidden;border:1px solid #ffffff32;border-radius:14px;box-shadow:0 20px 50px #0009; }
+    .art-card img { width:100%;height:100%;object-fit:cover;display:block; }
+    .art-back { width:130px;height:160px;right:5px;top:7px;transform:rotate(10deg);opacity:.72; }
+    .art-front { width:142px;height:176px;left:27px;top:15px;transform:rotate(-8deg); }
+    .art-chip { position:absolute;right:0;bottom:10px;background:#17191fde;border:1px solid #ffffff28;padding:9px 12px;border-radius:10px;backdrop-filter:blur(10px);font-size:10px;color:#dedee4; }
+    .art-chip b { color:var(--lime); }
+    .section-head { display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin:37px 0 17px; }
+    .section-head h2 { font:600 20px "Space Grotesk",sans-serif;letter-spacing:-.5px;margin:0 0 4px; }
+    .section-head p { color:var(--muted);font-size:11px;margin:0; }
+    .result-count { color:#868994;font-size:11px; }
+    .category-strip { display:flex;gap:8px;overflow-x:auto;padding:0 0 17px;scrollbar-width:none; }
+    .category-strip::-webkit-scrollbar { display:none; }
+    .chip { white-space:nowrap;border-radius:30px;background:#15171d;color:#a7a9b2;border:1px solid #282a32;padding:8px 12px;font-size:11px;cursor:pointer;transition:.2s; }
+    .chip:hover { color:#fff;border-color:#555964; }
+    .chip.active { color:#14170e;background:var(--lime);border-color:var(--lime);font-weight:700; }
+    .masonry { columns:4 220px;column-gap:17px; }
+    .prompt-card { break-inside:avoid;margin:0 0 17px;background:#15171d;border:1px solid #252730;border-radius:13px;overflow:hidden;transition:transform .28s ease,border-color .28s,box-shadow .28s; }
+    .prompt-card:hover { transform:translateY(-4px);border-color:#484b55;box-shadow:0 16px 38px #0005; }
+    .card-image { position:relative;overflow:hidden;background:#252633; }
+    .card-image img { width:100%;display:block;object-fit:cover;transition:transform .65s cubic-bezier(.2,.8,.2,1); }
+    .prompt-card:hover .card-image img { transform:scale(1.045); }
+    .card-image .shade { position:absolute;inset:35% 0 0;background:linear-gradient(transparent,#0009);pointer-events:none; }
+    .card-tag { position:absolute;top:11px;left:11px;border:1px solid #ffffff25;background:#11121bbd;backdrop-filter:blur(10px);border-radius:20px;padding:5px 8px;color:#e9e9ed;font-size:9px; }
+    .save-btn { position:absolute;top:9px;right:9px;width:30px;height:30px;display:grid;place-items:center;border:1px solid #ffffff33;background:#11121bbd;backdrop-filter:blur(8px);border-radius:50%;color:white;cursor:pointer;transition:.2s; }
+    .save-btn:hover,.save-btn.saved { color:#ff7899;border-color:#ff789988; }
+    .save-btn svg { width:14px;height:14px; }
+    .card-overlay { position:absolute;inset:auto 10px 10px;display:flex;gap:6px;transform:translateY(7px);opacity:0;transition:.22s; }
+    .prompt-card:hover .card-overlay,.prompt-card:focus-within .card-overlay { transform:translateY(0);opacity:1; }
+    .overlay-btn { flex:1;border:1px solid #ffffff28;background:#16171dd9;backdrop-filter:blur(8px);border-radius:7px;padding:8px 5px;font-size:9px;font-weight:700;cursor:pointer; }
+    .overlay-btn:hover { background:var(--lime);color:#11140a;border-color:var(--lime); }
+    .overlay-btn.preview { background:#ffffffed;color:#141414;border-color:#fff; }
+    .overlay-btn.preview:hover { background:var(--lime);border-color:var(--lime); }
+    .card-body { padding:12px 12px 13px; }
+    .card-title-row { display:flex;justify-content:space-between;gap:8px;align-items:center; }
+    .card-title { font:600 13px "Space Grotesk",sans-serif;margin:0;letter-spacing:-.2px; }
+    .card-duration { color:#8b8e99;font-size:9px;white-space:nowrap; }
+    .card-prompt { color:#999ba5;font-size:10px;line-height:1.55;margin:7px 0 12px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden; }
+    .card-footer { display:flex;align-items:center;justify-content:space-between;padding-top:9px;border-top:1px solid #ffffff0b;color:#858893;font-size:9px; }
+    .card-footer span:first-child { display:flex;align-items:center;gap:5px; }
+    .spark { color:var(--lime);font-size:12px; }
+    .empty { display:none;text-align:center;color:#a2a4ae;padding:70px 15px;border:1px dashed #373943;border-radius:14px;font-size:13px; }
+    .empty strong { display:block;color:#f0f0f3;font:600 17px "Space Grotesk",sans-serif;margin-bottom:6px; }
+    .mobile-menu { display:none; }
+    input[type=file] { display:none; }
+    .modal-backdrop { display:none;position:fixed;inset:0;z-index:12;background:#050609d9;backdrop-filter:blur(10px);align-items:center;justify-content:center;padding:20px; }
+    .modal-backdrop.open { display:flex; }
+    .modal { width:min(840px,100%);max-height:min(750px,92vh);overflow:auto;background:#15171d;border:1px solid #363943;border-radius:18px;box-shadow:0 28px 90px #000a;position:relative; }
+    .modal-head { display:flex;align-items:center;justify-content:space-between;padding:18px 21px;border-bottom:1px solid var(--line); }
+    .modal-head h3 { margin:0;font:600 16px "Space Grotesk",sans-serif; }
+    .close-btn { border:0;background:transparent;color:#aeb0b9;font-size:24px;cursor:pointer;line-height:1; }
+    .modal-content { display:grid;grid-template-columns:1fr 1fr;gap:23px;padding:21px; }
+    .preview-stage { min-height:310px;border:1px dashed #424550;border-radius:13px;display:grid;place-items:center;position:relative;overflow:hidden;background:radial-gradient(ellipse at 30% 20%,#9e6cff24,transparent 45%),#101116; }
+    .preview-stage img { display:none;width:100%;height:100%;max-height:420px;object-fit:cover;position:absolute;inset:0; }
+    .preview-stage.has-photo { border-style:solid;border-color:#b2ff7788; }
+    .preview-stage.has-photo img { display:block; }
+    .preview-placeholder { color:#9b9da7;text-align:center;max-width:230px;padding:20px;z-index:1; }
+    .preview-stage.has-photo .preview-placeholder { display:none; }
+    .upload-orb { width:42px;height:42px;border-radius:14px;margin:0 auto 12px;background:#d5ff6717;color:var(--lime);display:grid;place-items:center;font-size:19px; }
+    .preview-placeholder b { display:block;color:#e8e8ec;font-size:13px;margin-bottom:6px; }
+    .preview-placeholder span { font-size:10px;line-height:1.5; }
+    #effectCanvas { position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:2; }
+    .modal-details { display:flex;flex-direction:column;gap:12px; }
+    .modal-prompt-label { color:#858893;text-transform:uppercase;letter-spacing:1px;font-size:9px;font-weight:700; }
+    .modal-prompt { background:#101116;border:1px solid #292b34;border-radius:10px;padding:12px;color:#c7c8cf;line-height:1.6;font-size:11px; }
+    .modal-actions { display:flex;gap:8px;margin-top:auto;flex-wrap:wrap; }
+    .modal-actions button { flex:1;min-width:120px; }
+    .upload-hint { font-size:10px;color:#81848f;line-height:1.5;margin:0; }
+    .toast { position:fixed;z-index:20;bottom:25px;left:50%;transform:translate(-50%,20px);opacity:0;pointer-events:none;background:#e5ff9b;color:#171a10;border-radius:9px;padding:11px 16px;font-size:12px;font-weight:700;box-shadow:0 8px 25px #0007;transition:.25s; }
+    .toast.show { opacity:1;transform:translate(-50%,0); }
+    @media (max-width:1200px) {
+      :root { --sidebar:220px; }
+      .topbar,.content { padding-left:28px;padding-right:28px; }
+      .hero-art { right:2%;transform:translateY(-50%) scale(.85);transform-origin:right center; }
+      .masonry { columns:3 215px; }
+    }
+    @media (max-width:900px) {
+      :root { --sidebar:68px; }
+      .sidebar { padding:20px 10px;align-items:center; }
+      .brand { padding:0 0 28px; }
+      .brand-name,.nav-label,.nav-link .nav-text,.nav-count,.side-upload,.profile div:nth-child(2) { display:none; }
+      .nav-link { justify-content:center;padding:12px;width:46px;height:44px; }
+      .nav-icon { font-size:18px; }
+      .profile { width:100%;justify-content:center;padding:16px 0 0; }
+      .hero-art { opacity:.65;right:-15px; }
+      .hero-copy { max-width:65%; }
+      .masonry { columns:3 190px; }
+    }
+    @media (max-width:640px) {
+      :root { --sidebar:0px; }
+      .sidebar { display:none; }
+      .sidebar.mobile-open { display:flex;width:250px;align-items:stretch;box-shadow:15px 0 45px #0009; }
+      .sidebar.mobile-open .brand-name,.sidebar.mobile-open .nav-label,.sidebar.mobile-open .nav-link .nav-text,.sidebar.mobile-open .nav-count,.sidebar.mobile-open .side-upload,.sidebar.mobile-open .profile div:nth-child(2) { display:block; }
+      .sidebar.mobile-open .side-upload { display:block; }
+      .sidebar.mobile-open .brand { padding:0 8px 28px; }
+      .sidebar.mobile-open .nav-link { justify-content:flex-start;width:100%;height:auto; }
+      .sidebar.mobile-open .profile { justify-content:flex-start;padding:16px 7px 0; }
+      .main { margin:0; }
+      .topbar { height:62px;padding:0 16px; }
+      .crumb { display:none; }
+      .top-actions { width:100%; }
+      .search { width:100%; }
+      .kbd,.top-actions .icon-btn { display:none; }
+      .mobile-menu { display:grid; }
+      .content { padding:20px 15px 45px; }
+      .hero { min-height:280px;padding:23px 20px;align-items:flex-start; }
+      .hero-copy { max-width:100%; }
+      h1 { font-size:34px;max-width:370px; }
+      .hero-copy p { max-width:340px;font-size:12px; }
+      .hero-art { opacity:.26;right:-70px;top:auto;bottom:-63px;transform:scale(.78);transform-origin:right bottom; }
+      .hero-buttons { position:relative;z-index:2; }
+      .section-head { margin-top:28px; }
+      .masonry { columns:2 145px;column-gap:10px; }
+      .prompt-card { margin-bottom:10px;border-radius:11px; }
+      .card-body { padding:10px; }
+      .card-title { font-size:12px; }
+      .card-prompt { font-size:9px; }
+      .card-overlay { transform:none;opacity:1;inset:auto 7px 7px; }
+      .overlay-btn { font-size:8px;padding:7px 3px; }
+      .modal-content { grid-template-columns:1fr;padding:15px;gap:14px; }
+      .preview-stage { min-height:250px; }
+    }
+    @media (prefers-reduced-motion:reduce) {
+      *,*::before,*::after { scroll-behavior:auto!important;animation-duration:.01ms!important;transition-duration:.01ms!important; }
+    }
+  </style>
+</head>
+<body>
+  <input id="photoInput" type="file" accept="image/*">
+  <div class="app">
+    <aside class="sidebar" aria-label="Main navigation">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M12 3.5 14 9l5.5 2-5.5 2-2 5.5-2-5.5-5.5-2L10 9l2-5.5Z" fill="currentColor"/><path d="m18.7 15.4.8 2.1 2.1.8-2.1.8-.8 2.1-.8-2.1-2.1-.8 2.1-.8.8-2.1Z" fill="currentColor"/></svg></div>
+        <div class="brand-name">seedance<span>.</span>studio</div>
+      </div>
+      <div class="nav-label">Discover</div>
+      <button class="nav-link active" data-category="All Prompts"><span class="nav-icon">⌂</span><span class="nav-text">All prompts</span><span class="nav-count" id="allCount"></span></button>
+      <button class="nav-link" data-category="Favorites"><span class="nav-icon">♡</span><span class="nav-text">Favorites</span><span class="nav-count" id="favoriteCount">0</span></button>
+      <div class="nav-label">Collections</div>
+      <div id="sideCategories"></div>
+      <div class="sidebar-spacer"></div>
+      <div class="side-upload">
+        <strong>Your photo, reimagined</strong>
+        <p>Bring a prompt to life with your own image.</p>
+        <button class="upload-trigger">＋ Upload a photo</button>
+      </div>
+      <div class="profile"><div class="avatar">S</div><div>Creative studio<small>Seedance 2.0</small></div></div>
+    </aside>
+    <main class="main">
+      <header class="topbar">
+        <button class="icon-btn mobile-menu" aria-label="Open categories">☰</button>
+        <div class="crumb">Studio <span> / </span> <b id="breadcrumb">Prompt library</b></div>
+        <div class="top-actions">
+          <label class="search" aria-label="Search prompts">
+            <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="8.8" cy="8.8" r="5.8" stroke="currentColor" stroke-width="1.6"/><path d="m13.2 13.2 4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+            <input id="searchInput" type="search" placeholder="Search prompts, moods, brands…" autocomplete="off">
+            <span class="kbd">⌘ K</span>
+          </label>
+          <button class="icon-btn upload-trigger" aria-label="Upload a photo" title="Upload your photo">＋</button>
+        </div>
+      </header>
+      <div class="content">
+        <section class="hero">
+          <div class="hero-copy">
+            <div class="eyebrow"><i></i> Seedance 2.0 prompt library</div>
+            <h1>Make your next idea <span>move.</span></h1>
+            <p>A handpicked library of cinematic prompts, visual worlds, and brand-ready ideas. Find a look, add your photo, and imagine what’s next.</p>
+            <div class="hero-buttons">
+              <button class="primary-btn" id="exploreBtn">Explore the library <span aria-hidden="true">↗</span></button>
+              <button class="secondary-btn upload-trigger">＋ Try with your photo</button>
+            </div>
+          </div>
+          <div class="hero-art" aria-hidden="true">
+            <div class="art-card art-back"><img src="https://images.unsplash.com/photo-1531058020387-3be344556be6?auto=format&fit=crop&w=360&q=80" alt=""></div>
+            <div class="art-card art-front"><img src="https://images.unsplash.com/photo-1534447677768-be436bb09401?auto=format&fit=crop&w=360&q=80" alt=""></div>
+            <div class="art-chip"><b>✦</b> 180+ ways to imagine</div>
+          </div>
+        </section>
+        <section id="library">
+          <div class="section-head">
+            <div><h2 id="sectionTitle">Explore the library</h2><p>Ideas worth a closer look. Your next favorite is in here.</p></div>
+            <span class="result-count" id="resultCount"></span>
+          </div>
+          <div class="category-strip" id="categoryStrip" aria-label="Filter by category"></div>
+          <div class="masonry" id="promptGrid"></div>
+          <div class="empty" id="emptyState"><strong>No prompts found</strong>Try another search or choose a different collection.</div>
+        </section>
+      </div>
+    </main>
+  </div>
+  <div class="modal-backdrop" id="previewModal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <div class="modal">
+      <div class="modal-head"><h3 id="modalTitle">Preview with your photo</h3><button class="close-btn" id="closeModal" aria-label="Close preview">×</button></div>
+      <div class="modal-content">
+        <div class="preview-stage" id="previewStage">
+          <img id="uploadedImage" alt="Your uploaded preview">
+          <canvas id="effectCanvas"></canvas>
+          <div class="preview-placeholder"><div class="upload-orb">↥</div><b>Drop in your starting frame</b><span>Choose a photo to see it alongside your selected Seedance prompt.</span></div>
+        </div>
+        <div class="modal-details">
+          <div class="modal-prompt-label">Selected prompt</div>
+          <div class="modal-prompt" id="modalPrompt">Choose a prompt card to get started.</div>
+          <p class="upload-hint">Your image stays in this browser. Preview is a visual mockup; connect your Seedance API to generate a video.</p>
+          <div class="modal-actions">
+            <button class="secondary-btn" id="modalUpload">＋ Choose photo</button>
+            <button class="secondary-btn" id="copyPrompt">Copy prompt</button>
+            <button class="primary-btn" id="generateBtn">Generate preview ↗</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script>
+    const categories = [
+      { name: "Cinematic Films", icon: "🎬" },
+      { name: "Fashion & Clothing", icon: "👗" },
+      { name: "Beauty & Cosmetics", icon: "💄" },
+      { name: "3D Product Visuals", icon: "🎨" },
+      { name: "Advertising & Commercial", icon: "📦" },
+      { name: "Visual Effects & Liquid", icon: "✨" },
+      { name: "Anime & Characters", icon: "🎭" },
+      { name: "Abstract & Artistic", icon: "🌈" }
+    ];
+    const prompts = [
+      { id:"desert",title:"The Last Light",category:"Cinematic Films",tag:"Cinematic",height:290,duration:"8 sec",image:"photo-1500530855697-b586d89ba3ee",prompt:"A lone traveler crosses an immense golden desert at blue hour. Wind pulls the fabric of their coat as distant mountains disappear into haze. Slow anamorphic push-in, restrained film grain, muted amber and deep teal, Denis Villeneuve-inspired scale, 2.39:1." },
+      { id:"serum",title:"Dewdrop Ritual",category:"Beauty & Cosmetics",tag:"Beauty",height:240,duration:"6 sec",image:"photo-1608248543803-ba4f8c70ae0b",prompt:"A glass skincare serum bottle rotates slowly above a bed of translucent water. Dew beads travel over frosted glass; a soft rose-gold sunrise blooms behind it. Luxury beauty campaign, macro lens, immaculate highlights, tactile slow motion." },
+      { id:"neon",title:"After Hours, Tokyo",category:"Cinematic Films",tag:"Neo-noir",height:320,duration:"10 sec",image:"photo-1519608487953-e999c86e7455",prompt:"Rain-slick Tokyo alley in the last hour before dawn. A woman with a clear umbrella crosses beneath pink kanji neon, reflections ripple across the pavement. Patient tracking shot, rich blacks, 35mm film halation, atmospheric and intimate." },
+      { id:"sneaker",title:"Cloud Runner 01",category:"3D Product Visuals",tag:"3D product",height:220,duration:"5 sec",image:"photo-1542291026-7eec264c27ff",prompt:"A sculptural white running shoe floats in a weightless cobalt studio. Satin ribbons of electric lime orbit the silhouette as the shoe turns, revealing mesh and translucent sole details. Premium 3D product render, crisp edge lighting, seamless camera loop." },
+      { id:"fashion",title:"Soft Structure",category:"Fashion & Clothing",tag:"Editorial",height:310,duration:"8 sec",image:"photo-1539109136881-3be0616acf4b",prompt:"High-fashion editorial on a windswept rooftop at sunset. A model in a sculptural ivory coat turns toward the breeze; the fabric billows like a sail. Natural skin texture, warm 35mm grain, elegant slow dolly, minimalist luxury campaign." },
+      { id:"liquid",title:"Chromatic Bloom",category:"Visual Effects & Liquid",tag:"Liquid morph",height:255,duration:"7 sec",image:"photo-1534447677768-be436bb09401",prompt:"A chrome orb melts into a ribbon of liquid mercury, flowing through a luminous magenta-and-indigo void before resolving into a perfect sphere. Fluid simulation, iridescent reflections, macro detail, hypnotic seamless transformation." },
+      { id:"anime",title:"Skyline Courier",category:"Anime & Characters",tag:"Anime",height:300,duration:"8 sec",image:"photo-1519608487953-e999c86e7455",prompt:"An energetic hand-drawn anime courier races along a rooftop at golden hour, scarf streaming in the wind. The city blooms into watercolor clouds behind them. Expressive keyframes, painterly linework, dynamic wide-angle tracking shot." },
+      { id:"muj",title:"Quiet Objects",category:"Advertising & Commercial",tag:"Brand film",height:255,duration:"6 sec",image:"photo-1494438639946-1ebd1d20bf85",prompt:"A calm Japanese-inspired product film: a ceramic cup, linen cloth, and a single branch on a warm oak table. Morning sunlight travels slowly across the still life. Minimal composition, honest materiality, soft shadows, quiet and refined." },
+      { id:"dream",title:"A World in Petals",category:"Abstract & Artistic",tag:"Surreal",height:325,duration:"9 sec",image:"photo-1490750967868-88aa4486c946",prompt:"A field of translucent flowers opens in accelerated bloom, petals becoming stained glass as the camera drifts through them. Pastel coral, lavender and jade, dreamlike refraction, delicate organic motion, poetic art-film composition." },
+      { id:"parfum",title:"No. 08 — Night Air",category:"Advertising & Commercial",tag:"Fragrance",height:275,duration:"6 sec",image:"photo-1594035910387-fea47794261f",prompt:"A sculptural perfume bottle emerges from a pool of black glass. A silver ribbon of smoke curls around the bottle, catching one dramatic beam of light. High-contrast luxury fragrance film, slow orbit, precise specular highlights, dark and sensual." },
+      { id:"street",title:"Concrete Ballet",category:"Fashion & Clothing",tag:"Streetwear",height:240,duration:"7 sec",image:"photo-1529139574466-a303027c1d8b",prompt:"A streetwear lookbook becomes a fluid dance through brutalist architecture. The model pivots between sunlit concrete columns; each cut lands on a confident pose. Handheld energy, hard noon shadows, desaturated palette with one vivid red accent." },
+      { id:"cat",title:"Tiny Planet, Big Cat",category:"Visual Effects & Liquid",tag:"Playful VFX",height:295,duration:"6 sec",image:"photo-1573865526739-10659fec78a5",prompt:"A curious tabby cat steps onto a miniature planet made of moss and tiny flowers. The world gently rotates beneath its paws as fireflies orbit in soft focus. Whimsical practical-magic look, detailed fur, warm lens bloom, delightful reveal." },
+      { id:"watch",title:"Orbit / 04",category:"3D Product Visuals",tag:"3D product",height:215,duration:"5 sec",image:"photo-1524805444758-089113d48a6d",prompt:"A precision timepiece assembles itself from floating brushed-steel components in a deep midnight studio. Every gear snaps into place with measured elegance; a narrow light sweeps across the dial. Photoreal CGI, engineered choreography, premium watch campaign." },
+      { id:"ink",title:"Ink Between Worlds",category:"Anime & Characters",tag:"Anime",height:270,duration:"8 sec",image:"photo-1470252649378-9c29740c9fa8",prompt:"A lone anime traveler walks through a landscape where black ink mountains dissolve into a vivid orange sky. Their footsteps leave glowing calligraphy in the water. Fluid 2D animation, Japanese ink-wash textures, contemplative pacing, striking silhouette." },
+      { id:"glass",title:"Glass Garden",category:"Abstract & Artistic",tag:"Abstract",height:235,duration:"7 sec",image:"photo-1518837695005-2083093ee35b",prompt:"A transparent glass garden grows in a deep ocean, each stem refracting moving caustics onto the seafloor. Slow camera glide between delicate crystalline forms, rich cyan gradients, meditative pacing, elegant macro cinematography." },
+      { id:"coffee",title:"First Pour",category:"Advertising & Commercial",tag:"Food film",height:300,duration:"6 sec",image:"photo-1495474472287-4d71bcdd2085",prompt:"Extreme macro of fresh espresso pouring into a handmade cream ceramic cup. Crema folds into a dark caramel spiral as steam catches the morning light. Tactile slow motion, rich warm tones, shallow depth of field, crafted coffee commercial." }
+    ];
+    const grid = document.getElementById("promptGrid");
+    const categoryStrip = document.getElementById("categoryStrip");
+    const searchInput = document.getElementById("searchInput");
+    const photoInput = document.getElementById("photoInput");
+    const modal = document.getElementById("previewModal");
+    const stage = document.getElementById("previewStage");
+    const uploadedImage = document.getElementById("uploadedImage");
+    const canvas = document.getElementById("effectCanvas");
+    const ctx = canvas.getContext("2d");
+    let activeCategory = "All Prompts";
+    let currentPrompt = null;
+    let currentPhotoUrl = "";
+    let toastTimeout;
+
+    let favorites = [];
+    try { favorites = JSON.parse(localStorage.getItem("seedance-favorites") || "[]"); } catch (_) {}
+    const savedSet = new Set(Array.isArray(favorites) ? favorites : []);
+    const safe = value => String(value).replace(/[&<>"']/g, char => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" })[char]);
+    const imgUrl = (id, width=700) => `https://images.unsplash.com/${id}?auto=format&fit=crop&w=${width}&q=82`;
+
+    function showToast(message) {
+      const toast = document.getElementById("toast");
+      toast.textContent = message;
+      toast.classList.add("show");
+      clearTimeout(toastTimeout);
+      toastTimeout = setTimeout(() => toast.classList.remove("show"), 2500);
+    }
+
+    function buildNavigation() {
+      document.getElementById("sideCategories").innerHTML = categories.map(item =>
+        `<button class="nav-link" data-category="${safe(item.name)}"><span class="nav-icon">${item.icon}</span><span class="nav-text">${safe(item.name)}</span><span class="nav-count">${prompts.filter(p=>p.category===item.name).length}</span></button>`
+      ).join("");
+      categoryStrip.innerHTML = `<button class="chip active" data-category="All Prompts">All prompts <span>${prompts.length}</span></button>` +
+        categories.map(item => `<button class="chip" data-category="${safe(item.name)}">${item.icon} ${safe(item.name)}</button>`).join("");
+      document.getElementById("allCount").textContent = prompts.length;
+    }
+
+    function render() {
+      const query = searchInput.value.trim().toLowerCase();
+      const filtered = prompts.filter(item => {
+        const categoryMatch = activeCategory === "All Prompts" || (activeCategory === "Favorites" ? savedSet.has(item.id) : item.category === activeCategory);
+        const queryMatch = !query || `${item.title} ${item.category} ${item.tag} ${item.prompt}`.toLowerCase().includes(query);
+        return categoryMatch && queryMatch;
+      });
+      grid.innerHTML = filtered.map(item => `
+        <article class="prompt-card" data-id="${item.id}">
+          <div class="card-image">
+            <img src="${imgUrl(item.image)}" alt="${safe(item.title)} video prompt moodboard" loading="lazy" style="height:${item.height}px" onerror="this.style.display='none';this.parentElement.style.background='linear-gradient(145deg,#292239,#293143,#18292c)'">
+            <div class="shade"></div><span class="card-tag">${safe(item.tag)}</span>
+            <button class="save-btn ${savedSet.has(item.id)?"saved":""}" data-action="save" aria-label="${savedSet.has(item.id)?"Remove from":"Add to"} favorites" aria-pressed="${savedSet.has(item.id)}"><svg viewBox="0 0 20 20" fill="${savedSet.has(item.id)?"currentColor":"none"}" stroke="currentColor" stroke-width="1.6"><path d="M10 17s-7-4.4-7-9.1A3.9 3.9 0 0 1 10 5.8a3.9 3.9 0 0 1 7 2.1C17 12.6 10 17 10 17Z"/></svg></button>
+            <div class="card-overlay"><button class="overlay-btn" data-action="use">Use this prompt</button><button class="overlay-btn preview" data-action="preview">Preview with my photo</button></div>
+          </div>
+          <div class="card-body">
+            <div class="card-title-row"><h3 class="card-title">${safe(item.title)}</h3><span class="card-duration">${safe(item.duration)}</span></div>
+            <p class="card-prompt">${safe(item.prompt)}</p>
+            <div class="card-footer"><span><b class="spark">✦</b> ${safe(item.category)}</span><span>Seedance 2.0</span></div>
+          </div>
+        </article>`).join("");
+      document.getElementById("emptyState").style.display = filtered.length ? "none" : "block";
+      document.getElementById("resultCount").textContent = `${filtered.length} ${filtered.length === 1 ? "prompt" : "prompts"}`;
+      document.getElementById("favoriteCount").textContent = savedSet.size;
+      document.getElementById("sectionTitle").textContent = activeCategory === "All Prompts" ? "Explore the library" : activeCategory;
+      document.getElementById("breadcrumb").textContent = activeCategory === "All Prompts" ? "Prompt library" : activeCategory;
+      document.querySelectorAll("[data-category]").forEach(button => button.classList.toggle("active", button.dataset.category === activeCategory));
+    }
+
+    function selectPrompt(prompt, openPreview) {
+      currentPrompt = prompt;
+      document.getElementById("modalPrompt").textContent = prompt.prompt;
+      document.getElementById("modalTitle").textContent = `Preview · ${prompt.title}`;
+      if (openPreview) openModal();
+      else {
+        showToast(`“${prompt.title}” selected — copy it or preview with your photo.`);
+        openModal();
+      }
+    }
+
+    function openModal() {
+      modal.classList.add("open");
+      document.body.style.overflow = "hidden";
+      if (!currentPhotoUrl) photoInput.click();
+      requestAnimationFrame(sizeCanvas);
+    }
+    function closeModal() {
+      modal.classList.remove("open");
+      document.body.style.overflow = "";
+      stopLiquid();
+    }
+
+    document.addEventListener("click", event => {
+      const categoryButton = event.target.closest("[data-category]");
+      if (categoryButton) {
+        activeCategory = categoryButton.dataset.category;
+        render();
+        if (innerWidth < 640) document.querySelector(".sidebar")?.classList.remove("mobile-open");
+        return;
+      }
+      const actionButton = event.target.closest("[data-action]");
+      if (actionButton) {
+        const item = prompts.find(prompt => prompt.id === actionButton.closest(".prompt-card")?.dataset.id);
+        if (!item) return;
+        if (actionButton.dataset.action === "save") {
+          savedSet.has(item.id) ? savedSet.delete(item.id) : savedSet.add(item.id);
+          try { localStorage.setItem("seedance-favorites", JSON.stringify([...savedSet])); } catch (_) { showToast("Favorites could not be saved in this browser."); }
+          render();
+        } else selectPrompt(item, actionButton.dataset.action === "preview");
+      }
+    });
+    searchInput.addEventListener("input", render);
+    document.querySelectorAll(".upload-trigger").forEach(button => button.addEventListener("click", () => {
+      photoInput.click();
+      if (!currentPrompt) currentPrompt = prompts[0];
+      document.getElementById("modalPrompt").textContent = currentPrompt.prompt;
+      document.getElementById("modalTitle").textContent = `Preview · ${currentPrompt.title}`;
+      modal.classList.add("open");
+      document.body.style.overflow = "hidden";
+      requestAnimationFrame(sizeCanvas);
+    }));
+    document.getElementById("modalUpload").addEventListener("click", () => photoInput.click());
+    photoInput.addEventListener("change", () => {
+      const file = photoInput.files && photoInput.files[0];
+      if (!file) return;
+      if (!file.type.startsWith("image/")) { showToast("Choose an image file to preview."); return; }
+      if (file.size > 15 * 1024 * 1024) { showToast("Please choose an image smaller than 15 MB."); return; }
+      if (currentPhotoUrl) URL.revokeObjectURL(currentPhotoUrl);
+      currentPhotoUrl = URL.createObjectURL(file);
+      uploadedImage.src = currentPhotoUrl;
+      stage.classList.add("has-photo");
+      uploadedImage.onload = () => { sizeCanvas(); startLiquid(); };
+      showToast("Photo loaded — your preview is ready.");
+      photoInput.value = "";
+    });
+    document.getElementById("closeModal").addEventListener("click", closeModal);
+    modal.addEventListener("click", event => { if (event.target === modal) closeModal(); });
+    document.addEventListener("keydown", event => {
+      if (event.key === "Escape" && modal.classList.contains("open")) closeModal();
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); searchInput.focus(); }
+    });
+    document.getElementById("copyPrompt").addEventListener("click", async () => {
+      if (!currentPrompt) { showToast("Choose a prompt first."); return; }
+      try {
+        await navigator.clipboard.writeText(currentPrompt.prompt);
+        showToast("Prompt copied to clipboard.");
+      } catch (_) {
+        const textArea = document.createElement("textarea");
+        textArea.value = currentPrompt.prompt; textArea.style.position = "fixed"; textArea.style.opacity = "0";
+        document.body.appendChild(textArea); textArea.select();
+        try { document.execCommand("copy"); showToast("Prompt copied to clipboard."); }
+        catch (error) { showToast("Copy unavailable — select the prompt text to copy."); }
+        textArea.remove();
+      }
+    });
+    document.getElementById("generateBtn").addEventListener("click", () => {
+      if (!currentPhotoUrl) { photoInput.click(); showToast("Add a photo first to build your preview."); return; }
+      startLiquid();
+      showToast("Preview ready — connect the Seedance API to generate a video.");
+    });
+    document.getElementById("exploreBtn").addEventListener("click", () => document.getElementById("library").scrollIntoView({behavior:"smooth"}));
+    document.querySelector(".mobile-menu").addEventListener("click", () => {
+      document.querySelector(".sidebar").classList.toggle("mobile-open");
+    });
+
+    let animationFrame = 0;
+    function sizeCanvas() {
+      const rect = stage.getBoundingClientRect();
+      const ratio = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.width = Math.round(rect.width * ratio);
+      canvas.height = Math.round(rect.height * ratio);
+      canvas.style.width = `${rect.width}px`;
+      canvas.style.height = `${rect.height}px`;
+      ctx.setTransform(ratio,0,0,ratio,0,0);
+    }
+    function drawLiquid(time) {
+      if (!modal.classList.contains("open") || !stage.classList.contains("has-photo")) { animationFrame = 0; return; }
+      const width = stage.clientWidth, height = stage.clientHeight;
+      ctx.clearRect(0,0,width,height);
+      const drift = Math.sin(time / 900) * 18;
+      const glow = ctx.createRadialGradient(width*.75+drift,height*.28,4,width*.75+drift,height*.28,width*.54);
+      glow.addColorStop(0,"rgba(190,255,113,.2)");
+      glow.addColorStop(.48,"rgba(177,124,255,.12)");
+      glow.addColorStop(1,"rgba(177,124,255,0)");
+      ctx.fillStyle = glow;
+      ctx.fillRect(0,0,width,height);
+      ctx.globalCompositeOperation = "screen";
+      for (let i=0;i<5;i++) {
+        const x = width * (.15 + i*.18) + Math.sin(time/1100+i*1.7)*16;
+        const y = height * (.23 + (i%3)*.23) + Math.cos(time/1250+i)*10;
+        const radius = 11 + (Math.sin(time/500+i*2)+1)*6;
+        const orb = ctx.createRadialGradient(x-radius*.3,y-radius*.35,1,x,y,radius);
+        orb.addColorStop(0,"rgba(233,255,194,.72)");
+        orb.addColorStop(.4,"rgba(173,255,124,.22)");
+        orb.addColorStop(1,"rgba(173,255,124,0)");
+        ctx.fillStyle = orb; ctx.beginPath(); ctx.arc(x,y,radius,0,Math.PI*2); ctx.fill();
+      }
+      ctx.globalCompositeOperation = "source-over";
+      animationFrame = requestAnimationFrame(drawLiquid);
+    }
+    function startLiquid() { if (!animationFrame && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) animationFrame = requestAnimationFrame(drawLiquid); }
+    function stopLiquid() { if (animationFrame) cancelAnimationFrame(animationFrame); animationFrame = 0; ctx.clearRect(0,0,canvas.width,canvas.height); }
+    window.addEventListener("resize", () => { if (modal.classList.contains("open")) sizeCanvas(); });
+    buildNavigation();
+    render();
+  </script>
+</body>
+</html>
