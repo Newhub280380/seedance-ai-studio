@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate static site
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Validate HTML, links and inline JS
+        run: python .github/scripts/validate_site.py
+
+      - name: Smoke test - serve site over HTTP
+        run: |
+          set -euo pipefail
+          python -m http.server 8080 --bind 127.0.0.1 --directory . >/dev/null 2>&1 &
+          server_pid=$!
+          trap 'kill $server_pid' EXIT
+          for _ in $(seq 1 20); do
+            if curl -fsS http://127.0.0.1:8080/index.html -o /tmp/index.html; then
+              break
+            fi
+            sleep 0.5
+          done
+          test -s /tmp/index.html
+          grep -qi '<title>' /tmp/index.html
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/index.html)
+          test "$code" = "200"
+          echo "HTTP $code - index.html served correctly"
