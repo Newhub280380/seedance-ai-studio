@@ -10,6 +10,26 @@
 **Содержимое:** 31 промт в 8 категориях, поиск, фильтры-чипы, модалка с полным промтом,
 копирование в один клик, загрузка референс-фото, избранное в LocalStorage.
 
+## Accio: «Народный режиссёр»
+
+В этом репозитории рядом две вещи: живое приложение Seedance (`index.html`) и пакет
+документов для Accio — [`docs/accio-director/`](docs/accio-director/).
+
+Пакет — готовое задание для Accio Work: спроектировать приложение, где человек
+загружает несколько семейных фото, нажимает одну кнопку и получает короткий ролик.
+Внутри полный промпт (`ACCIO_PROMPT.md`), честные границы (`HONEST_SCOPE.md`:
+ролик 15–30 с из 2–5 фото — реально; «кино на 2–3 минуты за один проход» — нет),
+источники контекста, заметки по Open Design и библиотека `director_recipes/`
+(роутер интентов и 212 YAML-рецептов). Вложения — в `attach/` (архив конвейера
+`studio` и мета рецептов). Сайт `index.html` от пакета не зависит.
+
+This repo is the Seedance studio and the Accio pack docs. The pack in
+[`docs/accio-director/`](docs/accio-director/) is one assignment for Accio Work:
+design an app where a person uploads a few family photos, presses one button, and
+gets a short film. It includes the full prompt, the honest scope note, context
+sources, Open Design notes, the `director_recipes/` library, and `attach/`.
+`index.html` is unchanged and does not depend on the pack.
+
 ---
 
 ## Как открыть локально
@@ -37,6 +57,14 @@ python -m http.server 8080
 seedance-ai-studio/
 ├── index.html                  # весь сайт: разметка, стили, данные, логика
 ├── README.md                   # этот файл
+├── docs/accio-director/        # пакет Accio «Народный режиссёр» (документы, не сайт)
+│   ├── README.md
+│   ├── ACCIO_PROMPT.md
+│   ├── CONTEXT_SOURCES.md
+│   ├── HONEST_SCOPE.md
+│   ├── open_design_notes.md
+│   ├── attach/
+│   └── director_recipes/
 └── .github/
     ├── scripts/
     │   └── validate_site.py    # валидатор сайта (Python, без зависимостей)
