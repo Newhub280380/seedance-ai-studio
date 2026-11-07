@@ -1,0 +1,376 @@
+{
+  "source": "public_get",
+  "endpoint": "https://api.venice.ai/api/v1/models",
+  "fetched_at": "2026-11-07",
+  "note": "Curated subset of the public Venice catalog. Not the full catalog and not a generation result. Counts below are from this GET only.",
+  "full_catalog_counts_this_fetch": {
+    "image": 43,
+    "inpaint": 28,
+    "video": 138,
+    "tts": 11
+  },
+  "reference_caps_not_in_live_constraints": {
+    "seedance-2-5-reference-to-video-basic": {
+      "images": 30,
+      "videos": 10,
+      "audios": 10,
+      "basis": "MIT venice-video SKILL.md family table (table dated 2026-09-30 in that file) and OpenAPI maxItems. Live model_spec.constraints from this GET includes reference image ratio fields but no numeric cap."
+    }
+  },
+  "camera_trajectory_basis": {
+    "minimax-h3-max-multi-angle": "Venice OpenAPI QueueVideoRequest describes camera_trajectory as H3 Max Multi-Angle only. Live constraints for this id do not include a camera flag. The field is accepted only on capability video.venice_camera."
+  },
+  "models": [
+    {
+      "id": "venice-sd35",
+      "type": "image",
+      "name": "Venice SD35",
+      "offline": false,
+      "constraints": {
+        "promptCharacterLimit": 1500,
+        "steps": {
+          "default": 25,
+          "max": 30
+        },
+        "widthHeightDivisor": 16
+      },
+      "pricing": {
+        "generation": {
+          "usd": 0.01,
+          "diem": 0.01
+        },
+        "upscale": {
+          "2x": {
+            "usd": 0.02,
+            "diem": 0.02
+          },
+          "4x": {
+            "usd": 0.08,
+            "diem": 0.08
+          }
+        }
+      }
+    },
+    {
+      "id": "flux-2-pro",
+      "type": "image",
+      "name": "Flux 2 Pro",
+      "offline": false,
+      "constraints": {
+        "promptCharacterLimit": 3000,
+        "aspectRatios": [
+          "1:1",
+          "3:2",
+          "16:9",
+          "21:9",
+          "9:16",
+          "2:3",
+          "3:4",
+          "4:5"
+        ],
+        "defaultAspectRatio": "1:1",
+        "steps": {
+          "default": 20,
+          "max": 50
+        },
+        "widthHeightDivisor": 1
+      },
+      "pricing": {
+        "generation": {
+          "usd": 0.03,
+          "diem": 0.03
+        },
+        "upscale": {
+          "2x": {
+            "usd": 0.02,
+            "diem": 0.02
+          },
+          "4x": {
+            "usd": 0.08,
+            "diem": 0.08
+          }
+        }
+      }
+    },
+    {
+      "id": "firered-image-edit",
+      "type": "inpaint",
+      "name": "FireRed",
+      "offline": false,
+      "constraints": {
+        "aspectRatios": [
+          "auto",
+          "1:1",
+          "3:2",
+          "16:9",
+          "21:9",
+          "9:16",
+          "2:3",
+          "3:4",
+          "4:5"
+        ],
+        "promptCharacterLimit": 1500,
+        "combineImages": true,
+        "singleImageAspectRatio": true
+      },
+      "pricing": {
+        "inpaint": {
+          "usd": 0.04,
+          "diem": 0.04
+        }
+      }
+    },
+    {
+      "id": "nano-banana-2-edit",
+      "type": "inpaint",
+      "name": "Nano Banana 2",
+      "offline": false,
+      "constraints": {
+        "aspectRatios": [
+          "auto",
+          "1:1",
+          "3:2",
+          "16:9",
+          "21:9",
+          "9:16",
+          "2:3",
+          "3:4",
+          "4:5"
+        ],
+        "promptCharacterLimit": 32768,
+        "combineImages": true,
+        "maxInputImages": 6,
+        "singleImageAspectRatio": true,
+        "defaultResolution": "1K",
+        "resolutions": [
+          "1K",
+          "2K",
+          "4K"
+        ]
+      },
+      "pricing": {
+        "inpaint": {
+          "usd": 0.1,
+          "diem": 0.1
+        },
+        "resolutions": {
+          "1K": {
+            "usd": 0.1,
+            "diem": 0.1
+          },
+          "2K": {
+            "usd": 0.14,
+            "diem": 0.14
+          },
+          "4K": {
+            "usd": 0.19,
+            "diem": 0.19
+          }
+        }
+      }
+    },
+    {
+      "id": "wan-2.5-preview-text-to-video",
+      "type": "video",
+      "name": "Wan 2.5 Preview",
+      "offline": false,
+      "constraints": {
+        "model_type": "text-to-video",
+        "aspect_ratios": [
+          "16:9",
+          "9:16",
+          "1:1"
+        ],
+        "resolutions": [
+          "1080p",
+          "720p",
+          "480p"
+        ],
+        "durations": [
+          "5s",
+          "10s"
+        ],
+        "audio": true,
+        "audio_configurable": false,
+        "audio_input": true,
+        "per_reference_audio": false,
+        "video_input": false
+      },
+      "pricing": null
+    },
+    {
+      "id": "seedance-2-5-reference-to-video-basic",
+      "type": "video",
+      "name": "Seedance 2.5 R2V",
+      "offline": false,
+      "constraints": {
+        "model_type": "image-to-video",
+        "aspect_ratios": [
+          "21:9",
+          "16:9",
+          "4:3",
+          "1:1",
+          "3:4",
+          "9:16"
+        ],
+        "resolutions": [
+          "1080p",
+          "720p",
+          "480p"
+        ],
+        "durations": [
+          "4s",
+          "5s",
+          "6s",
+          "7s",
+          "8s",
+          "9s",
+          "10s",
+          "11s",
+          "12s",
+          "13s",
+          "14s",
+          "15s",
+          "16s",
+          "17s",
+          "18s",
+          "19s",
+          "20s",
+          "21s",
+          "22s",
+          "23s",
+          "24s",
+          "25s",
+          "26s",
+          "27s",
+          "28s",
+          "29s",
+          "30s"
+        ],
+        "audio": true,
+        "audio_configurable": true,
+        "audio_input": true,
+        "per_reference_audio": false,
+        "video_input": false,
+        "prompt_character_limit": 15000,
+        "reference_image_min_short_side_pixels": 300,
+        "reference_image_min_aspect_ratio": 0.4,
+        "reference_image_max_aspect_ratio": 2.5
+      },
+      "pricing": null
+    },
+    {
+      "id": "minimax-h3-max-multi-angle",
+      "type": "video",
+      "name": "MiniMax H3 Max Multi-Angle",
+      "offline": false,
+      "constraints": {
+        "model_type": "image-to-video",
+        "aspect_ratios": [],
+        "resolutions": [
+          "480P",
+          "768P",
+          "1080P"
+        ],
+        "durations": [
+          "5s",
+          "6s",
+          "7s",
+          "8s",
+          "9s",
+          "10s",
+          "11s",
+          "12s",
+          "13s",
+          "14s",
+          "15s"
+        ],
+        "audio": true,
+        "audio_configurable": false,
+        "audio_input": false,
+        "per_reference_audio": false,
+        "video_input": false,
+        "prompt_character_limit": 10000
+      },
+      "pricing": null
+    },
+    {
+      "id": "tts-kokoro",
+      "type": "tts",
+      "name": "Kokoro Text to Speech",
+      "offline": false,
+      "constraints": {},
+      "pricing": {
+        "input": {
+          "usd": 3.5,
+          "diem": 3.5
+        }
+      },
+      "voices": [
+        "af_alloy",
+        "af_aoede",
+        "af_bella",
+        "af_heart",
+        "af_jadzia",
+        "af_jessica",
+        "af_kore",
+        "af_nicole",
+        "af_nova",
+        "af_river",
+        "af_sarah",
+        "af_sky",
+        "am_adam",
+        "am_echo",
+        "am_eric",
+        "am_fenrir",
+        "am_liam",
+        "am_michael",
+        "am_onyx",
+        "am_puck",
+        "am_santa",
+        "bf_alice",
+        "bf_emma",
+        "bf_lily",
+        "bm_daniel",
+        "bm_fable",
+        "bm_george",
+        "bm_lewis",
+        "ef_dora",
+        "em_alex",
+        "em_santa",
+        "ff_siwis",
+        "hf_alpha",
+        "hf_beta",
+        "hm_omega",
+        "hm_psi",
+        "if_sara",
+        "im_nicola",
+        "jf_alpha",
+        "jf_gongitsune",
+        "jf_nezumi",
+        "jf_tebukuro",
+        "jm_kumo",
+        "pf_dora",
+        "pm_alex",
+        "pm_santa",
+        "zf_xiaobei",
+        "zf_xiaoni",
+        "zf_xiaoxiao",
+        "zf_xiaoyi",
+        "zm_yunjian",
+        "zm_yunxi",
+        "zm_yunxia",
+        "zm_yunyang"
+      ],
+      "default_format": "mp3",
+      "supported_formats": [
+        "mp3",
+        "opus",
+        "aac",
+        "flac",
+        "wav",
+        "pcm"
+      ]
+    }
+  ]
+}
