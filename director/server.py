@@ -26,13 +26,14 @@ class DirectorHandler:
         parsed = urlparse(path)
         route = parsed.path
         if route.startswith("/api/director"):
-            return self._api(method, route, body)
+            return self._api(method, parsed, body)
         if method != "GET":
             return 405, {"ok": False, "error": {"code": "method", "message": "GET only"}}, "application/json"
         return self._static(route)
 
-    def _api(self, method, route, body):
+    def _api(self, method, parsed, body):
         try:
+            route = parsed.path
             if method == "GET" and route == "/api/director/capabilities":
                 return 200, self.app.capabilities(), "application/json"
             if method == "GET" and route == "/api/director/tasks":
@@ -57,7 +58,12 @@ class DirectorHandler:
                         raise DirectorRefusal("not_found", "Task not found", 404)
                     return 200, {"ok": True, "task": _view(task)}, "application/json"
                 if method == "GET" and len(parts) == 5 and parts[4] == "result":
-                    data, media = self.app.read_result(task_id)
+                    from urllib.parse import parse_qs
+                    query = parse_qs(parsed.query)
+                    role = (query.get("role") or [None])[0]
+                    index_text = (query.get("index") or [None])[0]
+                    index = int(index_text) if index_text is not None else None
+                    data, media = self.app.read_result(task_id, index=index, role=role)
                     return 200, data, media
                 if method == "POST" and len(parts) == 5 and parts[4] == "confirm":
                     payload = _json(body or b"{}")

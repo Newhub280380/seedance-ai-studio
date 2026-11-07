@@ -64,6 +64,59 @@ python -m director
 
 Проверка без сети и без генерации: `python -m unittest discover -s tests -v`. Ответы провайдеров в этих тестах подменяются.
 
+## Товар: вырез и длинная сторона 3840
+
+Существующая команда `prep_photo` вызывается процессом Режиссёра, не отдельным генератором. Веса на эту машину не входят. На box:
+
+```bash
+export DIRECTOR_PREP_PHOTO=/workspace/tools/photo-prep/prep_photo
+python -m director
+```
+
+`PREP_ONNX_MODEL` читает сам `prep_photo`. Если запускается копия скрипта не из `/workspace/tools/photo-prep`, укажите существующий файл модели тем же переменным, не прописывая путь в коде.
+
+Затем один раз, без повтора:
+
+```bash
+# original_asset_id — sha256 ответа POST /api/director/assets
+curl -sS -X POST http://127.0.0.1:8765/api/director/tasks \
+  -H 'Content-Type: application/json' \
+  -d '{"capability":"image.product_prep","client_request_id":"zishel-prep-1","confirm":true,"original_asset_id":"<sha256>"}'
+```
+
+Режиссёр сам вызывает две готовые команды существующего скрипта. Сначала вырез `--upscale none --size 0`. По альфе больше 16, с запасом в 1 пиксель, из выреза берётся плотная рамка объекта. Затем тот же скрипт с `--already-cut --upscale onnx --size 3840 --denoise none --bg transparent --model u2net` увеличивает уже этот объект, а не холст с полями. Нативный вырез не перезаписывается и не прогоняется через апскейл второй раз. `completed` только если итог — PNG с альфой, длинная сторона холста 3840, пропорции объекта сохранены, а длинная сторона самого объекта не меньше 98% от 3840. Иначе `object_below_target` или `onnx_fallback`, без ложного успеха.
+
+`GET /api/director/tasks/<id>/result` для этой операции отдаёт итог. Нативный вырез: `?role=cutout` или `?index=0`. Плотная рамка до апскейла: `?role=tight`.
+
+На box для повторного прогона нужен скрипт из этого дерева, потому что у исходного `prep_photo` нет `--already-cut`, и существующий файл ONNX:
+
+```bash
+export DIRECTOR_PREP_PHOTO="$PWD/director/vendor/photo-prep/prep_photo"
+export PREP_ONNX_MODEL=/workspace/tools/realesrgan/realesrgan_x4plus_fp16.onnx
+python -m director
+```
+
+## LTX-2.5 через Режиссёр
+
+Официальные модули [Lightricks/LTX-2](https://github.com/Lightricks/LTX-2) на коммите `4f521619ae0029e8fbb64d555030c2b121a33b4f`. README рекомендует LTX-2.5, не 2.3. Код Apache-2.0. Веса отдельно, LTX-2.x Community License. Режиссёр их не скачивает.
+
+- `ltx.distilled` — текст или кадр `--image`. Исходное видео сюда не принимается.
+- `ltx.dfr` — то же семейство плюс detailing IC-LoRA. Это не правка чужого ролика.
+- `ltx.ic_lora` — видео по референс-видео `--video-conditioning`, свой IC-LoRA, по желанию маска и ключевые кадры. Это не замена товара как у Parrot и не блокировка текста упаковки.
+- `ltx.retake` — переснять интервал времени.
+
+Без CUDA, без пакета `ltx_pipelines` и без файлов в `LTX_MODEL_ROOT` ответ `ltx_not_ready`, MP4 не создаётся. `--quantization fp8-cast` и `--offload cpu|disk` уходят в официальный CLI только если их попросили. Минимальный VRAM в README не указан.
+
+Платный многопользовательский режим выключен. Attachment A(20) запрещает конкурирующий сервис без отдельной лицензии и не снимается порогом выручки в 10 млн долларов. Это не юридическое заключение. Реклама и подписки отсюда не запускаются.
+
+```bash
+git clone https://github.com/Lightricks/LTX-2.git
+git -C LTX-2 checkout 4f521619ae0029e8fbb64d555030c2b121a33b4f
+export LTX_PYTHON=python3
+export LTX_MODEL_ROOT=/path/to/models/ltx-2.5
+python -m director
+```
+
 ## Структура
 
 ```
