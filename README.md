@@ -64,6 +64,28 @@ python -m director
 
 Проверка без сети и без генерации: `python -m unittest discover -s tests -v`. Ответы провайдеров в этих тестах подменяются.
 
+## Товар: вырез и длинная сторона 3840
+
+Существующая команда `prep_photo` вызывается процессом Режиссёра, не отдельным генератором. Веса на эту машину не входят. На box:
+
+```bash
+export DIRECTOR_PREP_PHOTO=/workspace/tools/photo-prep/prep_photo
+python -m director
+```
+
+`PREP_ONNX_MODEL` читает сам `prep_photo`. Если запускается копия скрипта не из `/workspace/tools/photo-prep`, укажите существующий файл модели тем же переменным, не прописывая путь в коде.
+
+Затем один раз, без повтора:
+
+```bash
+# original_asset_id — sha256 ответа POST /api/director/assets
+curl -sS -X POST http://127.0.0.1:8765/api/director/tasks \
+  -H 'Content-Type: application/json' \
+  -d '{"capability":"image.product_prep","client_request_id":"zishel-prep-1","confirm":true,"original_asset_id":"<sha256>"}'
+```
+
+Режиссёр сам вызывает две готовые команды: вырез `--upscale none --size 0` и итог `--upscale onnx --size 3840 --denoise none --bg transparent --model u2net`. Статус `completed` только если оба PNG с альфой, длинная сторона выреза равна кадру, а итог имеет длинную сторону 3840 без смены пропорций. Предупреждение CLI о fallback с ONNX на soft отклоняет итог.
+
 ## Структура
 
 ```

@@ -1,0 +1,6 @@
+Unmodified copy of the existing photo-prep tool supplied for this Director route.
+Source files: prep_photo, prep_photo.py, README.md.
+They are not a new image pipeline. Model weights are not included.
+The box copy remains the runtime command when DIRECTOR_PREP_PHOTO points at it.
+prep_photo.py sha256: 8156c34df5d9da80b50d570034dab17acc6fd968dc0b5f632b98fb977a8de292
+prep_photo sha256: 26efd69a4c30ad123c88964c243a3114ca6cc9005faab01b5b047019cf9fd950

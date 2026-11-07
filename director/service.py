@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,6 +11,15 @@ from director.comfy_gate import inspect_templates
 from director.errors import DirectorRefusal, TransportFailure
 from director.h3_lanes import COMMERCIAL, hosted_max_spec, static_lanes
 from director.pngutil import solid_png
+from director.prep_route import (
+    LIMITS as PREP_LIMITS,
+    build_argv,
+    gallery_chrome_crop,
+    onnx_fallback,
+    resolve_command,
+    run_prep_command,
+    validate_png,
+)
 from director.providers import MinimaxClient, VeniceClient
 from director.skills import load_skills, skills_ready
 from director.store import TaskStore
@@ -48,6 +58,8 @@ class DirectorApp:
         self.minimax = MinimaxClient(minimax_transport, self.minimax_api_key)
         self.venice_transport = venice_transport
         self.minimax_transport = minimax_transport
+        self.prep_photo_command = os.environ.get("DIRECTOR_PREP_PHOTO") or "prep_photo"
+        self.prep_timeout = int(os.environ.get("DIRECTOR_PREP_TIMEOUT") or "900")
 
     def capabilities(self):
         items = []
@@ -258,6 +270,8 @@ class DirectorApp:
             return self._run_explainer(task)
         if kind == "h3_max_hosted":
             return self._run_max(task)
+        if kind == "product_prep":
+            return self._run_product_prep(task)
         raise DirectorRefusal("not_executable", "This capability has no executor", 409)
 
     def _quote(self, task, spec):
@@ -699,7 +713,128 @@ class DirectorApp:
             return self._prepare_explainer(body)
         if kind == "h3_max_hosted":
             return self._prepare_max(body)
+        if kind == "product_prep":
+            return self._prepare_product_prep(body)
         raise DirectorRefusal("not_executable", "No preparer for this capability")
+
+    def _prepare_product_prep(self, body):
+        if body.get("model") not in (None, "", "u2net"):
+            raise DirectorRefusal(
+                "model_not_this_lane",
+                "image.product_prep calls the existing prep_photo tool with rembg model u2net. Another model was not substituted.",
+            )
+        if body.get("upscale") not in (None, "", "onnx"):
+            raise DirectorRefusal("upscale_rejected", "This prep route uses --upscale onnx. A different upscaler was not substituted.")
+        if body.get("size") not in (None, "", 3840, "3840"):
+            raise DirectorRefusal("size_rejected", "The long side for this route is 3840. Another size was not substituted.")
+        return {
+            "original_asset_id": self._one_asset(body.get("original_asset_id")),
+            "model": "u2net",
+            "size": 3840,
+            "upscale": "onnx",
+            "denoise": "none",
+            "bg": "transparent",
+            "format": "png",
+            "prompt_used": False,
+            "limits": PREP_LIMITS,
+        }
+
+    def _run_product_prep(self, task):
+        command = resolve_command(self.prep_photo_command)
+        if not command:
+            task["status"] = "failed"
+            task["error"] = {
+                "code": "prep_command_missing",
+                "message": "DIRECTOR_PREP_PHOTO is not an executable prep_photo. Nothing was sent to a paid API.",
+            }
+            return self.store.save(task)
+        asset = self._require_asset(task["params"]["original_asset_id"])
+        work = self.data_dir / "prep" / task["id"]
+        work.mkdir(parents=True, exist_ok=True)
+        source = work / "original"
+        source.write_bytes(asset["data"])
+        from PIL import Image
+        with Image.open(source) as incoming:
+            incoming.load()
+            cropped = gallery_chrome_crop(incoming)
+            prep_input = incoming.convert("RGB") if cropped is None else cropped
+        crop_path = work / "crop.png"
+        prep_input.save(crop_path, format="PNG")
+        task["prep"] = {
+            "command": command,
+            "gallery_chrome_crop": cropped is not None,
+            "crop_size": list(prep_input.size),
+            "limits": PREP_LIMITS,
+        }
+        task["status"] = "running"
+        self.store.save(task)
+        cutout = work / "cutout.png"
+        output = work / "output.png"
+        stored = []
+        try:
+            stored.append(self._invoke_prep(
+                task,
+                command,
+                crop_path,
+                cutout,
+                upscale="none",
+                size=0,
+                expect_long_side=max(prep_input.size),
+                source_size=prep_input.size,
+                role="cutout",
+            ))
+            task["results"] = list(stored)
+            self.store.save(task)
+            stored.append(self._invoke_prep(
+                task,
+                command,
+                crop_path,
+                output,
+                upscale="onnx",
+                size=3840,
+                expect_long_side=3840,
+                source_size=prep_input.size,
+                role="output",
+            ))
+        except DirectorRefusal as exc:
+            task["results"] = stored
+            if stored:
+                task["result"] = stored[0]
+            task["status"] = "failed"
+            task["error"] = {"code": exc.code, "message": exc.message}
+            return self.store.save(task)
+        task["results"] = stored
+        task["result"] = stored[-1]
+        task["status"] = "completed"
+        task["error"] = None
+        task["fidelity"] = "cutout_plus_predicted_detail_not_label_identity"
+        return self.store.save(task)
+
+    def _invoke_prep(self, task, command, source, destination, *, upscale, size, expect_long_side, source_size, role):
+        argv = build_argv(command, source, destination, upscale=upscale, size=size)
+        task.setdefault("provider_calls", []).append({"argv": argv, "role": role})
+        self.store.save(task)
+        code, stdout, stderr = run_prep_command(argv, self.prep_timeout)
+        task["prep"].setdefault("runs", []).append({
+            "role": role,
+            "returncode": code,
+            "stderr_tail": stderr[-500:],
+        })
+        if code != 0:
+            raise DirectorRefusal("prep_failed", "prep_photo exited %s for %s and was not retried. %s" % (code, role, stderr[-300:]))
+        if upscale == "onnx" and onnx_fallback(stderr):
+            raise DirectorRefusal(
+                "onnx_fallback",
+                "prep_photo fell back off the requested ONNX Real-ESRGAN path. The output was not accepted.",
+            )
+        info = validate_png(destination, expect_long_side=expect_long_side, source_size=source_size)
+        info["role"] = role
+        info["media_type"] = "image/png"
+        info["sha256"] = hashlib.sha256(destination.read_bytes()).hexdigest()
+        stored = self.results / ("%s-%s.png" % (task["id"], role))
+        stored.write_bytes(destination.read_bytes())
+        info["file"] = stored.name
+        return info
 
     def _prepare_image(self, body):
         model_id = body.get("model") or "flux-2-pro"
@@ -1103,12 +1238,25 @@ class DirectorApp:
             {"id": "audio.speech", "title": "Речь", "provider": "venice", "kind": "audio_speech", "skills": ["venice-create-audio"], "endpoint": "POST /api/v1/audio/speech", "docs": "https://docs.venice.ai/api-reference/endpoint/audio/speech", "models": ["tts-kokoro"], "default_model": "tts-kokoro"},
             {"id": "explainer.project", "title": "Объясняющее видео: сцены и речь", "provider": "venice", "kind": "explainer", "skills": ["venice-explainer-video", "venice-create-video", "venice-create-audio"], "endpoint": "POST /api/v1/video/queue", "docs": "https://docs.venice.ai/guides/media/video-generation", "models": ["wan-2.5-preview-text-to-video"], "default_model": "wan-2.5-preview-text-to-video"},
             max_spec,
+            {
+                "id": "image.product_prep",
+                "title": "Товар: вырез фона и длинная сторона 3840",
+                "provider": "local_prep",
+                "kind": "product_prep",
+                "skills": [],
+                "endpoint": "prep_photo --model u2net --bg transparent --format png --size 3840 --upscale onnx --denoise none",
+                "docs": "director/vendor/photo-prep/README.md",
+                "default_model": "u2net",
+                "models": [],
+            },
         ]
 
     def _public_capability(self, spec):
         problems = skills_ready(self.skills, spec.get("skills") or []) if spec.get("provider") == "venice" else []
         key_ok = (spec.get("provider") != "venice" or bool(self.venice_api_key)) and (spec.get("provider") != "minimax" or bool(self.minimax_api_key))
-        if problems:
+        if spec.get("provider") == "local_prep":
+            status = "ready_to_confirm" if resolve_command(self.prep_photo_command) else "prep_command_missing"
+        elif problems:
             status = "skill_integrity_failed"
         elif not key_ok:
             status = "credential_missing"
