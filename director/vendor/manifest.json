@@ -1,0 +1,130 @@
+[
+  {
+    "file": "veniceai-skills/LICENSE",
+    "source": "https://github.com/veniceai/skills/blob/main/LICENSE",
+    "bytes": 1066,
+    "sha256": "0c3d01f6c80957efc97dd3a7b2e8ffb77d18de499ed4c372cf86048f03076307",
+    "license": "MIT (only document/template; NOT model/API license)",
+    "installed": false
+  },
+  {
+    "file": "veniceai-skills/skills.json",
+    "source": "https://github.com/veniceai/skills/blob/main/skills.json",
+    "bytes": 2517,
+    "sha256": "f32cd876e667b5874ea81ec1f1ba8cac5b969961bf1023b31e8dd68e69275506",
+    "license": "MIT (only document/template; NOT model/API license)",
+    "installed": false
+  },
+  {
+    "file": "veniceai-skills/skills/venice-product-photoshoot/SKILL.md",
+    "source": "https://github.com/veniceai/skills/blob/main/skills/venice-product-photoshoot/SKILL.md",
+    "bytes": 7102,
+    "sha256": "71e6e18b963fc04ab16da5932dc7df62dfed869b1ec33d97417c5e34f273547d",
+    "license": "MIT (only document/template; NOT model/API license)",
+    "installed": false
+  },
+  {
+    "file": "veniceai-skills/skills/venice-explainer-video/SKILL.md",
+    "source": "https://github.com/veniceai/skills/blob/main/skills/venice-explainer-video/SKILL.md",
+    "bytes": 7789,
+    "sha256": "58a760518f9671c757e1ba811db587142c7bd5503bbf8f12a54f27274ff819f5",
+    "license": "MIT (only document/template; NOT model/API license)",
+    "installed": false
+  },
+  {
+    "file": "veniceai-skills/skills/venice-create-video/SKILL.md",
+    "source": "https://github.com/veniceai/skills/blob/main/skills/venice-create-video/SKILL.md",
+    "bytes": 8172,
+    "sha256": "61fd743993d71af1f7d7ec2c93b016cda73272f253982ba228e01aa1f4772404",
+    "license": "MIT (only document/template; NOT model/API license)",
+    "installed": false
+  },
+  {
+    "file": "veniceai-skills/skills/venice-image-edit/SKILL.md",
+    "source": "https://github.com/veniceai/skills/blob/main/skills/venice-image-edit/SKILL.md",
+    "bytes": 16658,
+    "sha256": "c588ece004c7f413658ff26907d5f689894b81c6a9ed3dcde875345c86a0da05",
+    "license": "MIT (only document/template; NOT model/API license)",
+    "installed": false
+  },
+  {
+    "file": "veniceai-skills/skills/venice-create-image/SKILL.md",
+    "source": "https://github.com/veniceai/skills/blob/main/skills/venice-create-image/SKILL.md",
+    "bytes": 9329,
+    "sha256": "75cb9536e8e0b9e7dcb3577e1aecb4df2b2f7e0571e8bd10a3e927c63be8e00f",
+    "license": "MIT (only document/template; NOT model/API license)",
+    "installed": false
+  },
+  {
+    "file": "veniceai-skills/skills/venice-create-audio/SKILL.md",
+    "source": "https://github.com/veniceai/skills/blob/main/skills/venice-create-audio/SKILL.md",
+    "bytes": 8727,
+    "sha256": "50d09c28732a970bab82189659dbeb74ec3fa158f1b6f0c3a71a3bc2ef2b9b95",
+    "license": "MIT (only document/template; NOT model/API license)",
+    "installed": false
+  },
+  {
+    "file": "veniceai-skills/skills/venice-video/SKILL.md",
+    "source": "https://github.com/veniceai/skills/blob/main/skills/venice-video/SKILL.md",
+    "bytes": 25293,
+    "sha256": "0fb5c89d8380a4b3a2ef49a313900d1a1a2eb29d14d763aef0ebdd5eec6591ee",
+    "license": "MIT (only document/template; NOT model/API license)",
+    "installed": false
+  },
+  {
+    "file": "veniceai-skills/skills/venice-models/SKILL.md",
+    "source": "https://github.com/veniceai/skills/blob/main/skills/venice-models/SKILL.md",
+    "bytes": 17764,
+    "sha256": "54beb95202191570dd633463ee435962d0304c64f766496b2dd61f1843ecd9e1",
+    "license": "MIT (only document/template; NOT model/API license)",
+    "installed": false
+  },
+  {
+    "file": "comfy-h3/LICENSE",
+    "source": "https://github.com/Comfy-Org/workflow_templates/blob/main/LICENSE",
+    "bytes": 1074,
+    "sha256": "5dccd61c80c847cd6b22fa98124010163ab8646e573557a16a5cae31122f2056",
+    "license": "MIT (only document/template; NOT model/API license)",
+    "installed": false
+  },
+  {
+    "file": "comfy-h3/video_minimax_h3_r2v.json",
+    "source": "https://github.com/Comfy-Org/workflow_templates/blob/main/templates/video_minimax_h3_r2v.json",
+    "bytes": 46409,
+    "sha256": "0d8dd06afee5b348063817d6eed8b212720684eb3f09062601c826eb980cefeb",
+    "license": "MIT (only document/template; NOT model/API license)",
+    "installed": false
+  },
+  {
+    "file": "comfy-h3/video_minimax_h3_t2v.json",
+    "source": "https://github.com/Comfy-Org/workflow_templates/blob/main/templates/video_minimax_h3_t2v.json",
+    "bytes": 68461,
+    "sha256": "8a5eb23b0dd2df9e99b6f7af9684e770f188feca820d241364b729e01dedf3b6",
+    "license": "MIT (only document/template; NOT model/API license)",
+    "installed": false
+  },
+  {
+    "file": "firered-comfy/firered-image-edit-1.0.json",
+    "source": "https://huggingface.co/FireRedTeam/FireRed-Image-Edit-1.0-ComfyUI/resolve/main/firered-image-edit-1.0.json",
+    "bytes": 28860,
+    "sha256": "8c2ae8d56b01d76407d509b33101693e960d9fffadbce64cae5418797713747b",
+    "license": "Apache-2.0 declared by original FireRed ComfyUI card; component node/model terms separate",
+    "installed": false
+  },
+  {
+    "file": "firered-comfy/README.md",
+    "source": "https://huggingface.co/FireRedTeam/FireRed-Image-Edit-1.0-ComfyUI/raw/main/README.md",
+    "bytes": 1397,
+    "sha256": "9965002876844acfb35540c65ed708a252a7e93555d8ff2f0130e3cc245c79a2",
+    "license": "Apache-2.0 declared by original FireRed ComfyUI card; component node/model terms separate",
+    "installed": false
+  },
+  {
+    "file": "firered-comfy/LICENSE-2.0.txt",
+    "source": "https://www.apache.org/licenses/LICENSE-2.0.txt",
+    "bytes": 11358,
+    "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    "license": "Apache-2.0 declared by original FireRed ComfyUI card; component node/model terms separate",
+    "installed": false
+  }
+]

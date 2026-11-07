@@ -1,4 +1,6 @@
 _site/
+director-data/
+director-data-test/
 node_modules/
 __pycache__/
 *.pyc

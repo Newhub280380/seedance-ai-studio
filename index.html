@@ -71,6 +71,16 @@
     .prompt{white-space:pre-wrap;padding:18px;border:1px solid var(--line);border-radius:14px;background:#090b10;color:#dfe5ef;font:13px/1.65 ui-monospace,SFMono-Regular,Menlo,monospace}
     .modal-actions{display:flex;gap:10px;margin-top:16px;flex-wrap:wrap}
     .hidden{display:none!important}
+    .director{padding:28px 30px 60px}
+    .director h2{margin:0 0 8px;font-size:32px;letter-spacing:-.04em}
+    .director label{display:grid;gap:6px;margin:12px 0;color:var(--muted);font-size:13px}
+    .director input,.director textarea,.director select{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:#151720;color:var(--text)}
+    .director-row{display:flex;gap:10px;flex-wrap:wrap;align-items:end}
+    .director-row label{flex:1;min-width:140px}
+    .director-check{display:flex;gap:8px;align-items:center}
+    .director-note{color:var(--muted);max-width:820px}
+    .director-log{white-space:pre-wrap;padding:14px;border:1px solid var(--line);border-radius:14px;background:#090b10;color:#d5dbe8;min-height:120px}
+    #directorBtn.active{box-shadow:inset 3px 0 var(--accent);background:#20242f;color:var(--text)}
     @media(max-width:1100px){.gallery{column-count:3}}
     @media(max-width:800px){
       .app{display:block}
@@ -99,6 +109,7 @@
       <div class="brand"><span class="brand-mark">✦</span> Seedance Studio</div>
       <div class="eyebrow">Library</div>
       <nav class="nav" id="nav"></nav>
+      <div class="nav"><button type="button" id="directorBtn">▣ Режиссёр</button></div>
       <div class="sidebar-note"><strong>Твоя идея → визуал</strong>Выбери карточку, скопируй промт, вставь в Seedance вместе со своим фото — и получи готовый результат.</div>
     </aside>
     <main class="main">
@@ -109,7 +120,8 @@
           <button class="primary" id="uploadTop">＋ Моё фото</button>
         </div>
       </header>
-      <section class="hero">
+      <section class="director hidden" id="directorPanel"></section>
+      <section class="hero" id="hero">
         <div>
           <h1>Огромная библиотека,<br><span>готовая к генерации.</span></h1>
           <p>Скопировал промт → вставил своё фото → получил результат. Бренды, 3D‑товары, жидкие эффекты, кино, аниме, UGC и мемы из фильмов с неожиданной вставкой.</p>
@@ -136,6 +148,7 @@
       </div>
     </div>
   </div>
+  <script src="director/ui/director-client.js"></script>
   <script>
     const categories=[
       ['all','Все идеи','✦'],
@@ -256,6 +269,7 @@
     ['uploadTop','uploadHero'].forEach(id=>$('#'+id).onclick=()=>$('#file').click());
     $('#file').onchange=e=>{if(e.target.files[0])alert('Фото выбрано ✅ Теперь скопируй промт и вставь его в Seedance вместе с фото.');};
     render();
+    if (window.DirectorClient) DirectorClient.mount(document);
   </script>
 </body>
 </html>
