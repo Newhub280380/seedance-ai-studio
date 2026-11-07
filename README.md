@@ -96,6 +96,27 @@ export PREP_ONNX_MODEL=/workspace/tools/realesrgan/realesrgan_x4plus_fp16.onnx
 python -m director
 ```
 
+## LTX-2.5 через Режиссёр
+
+Официальные модули [Lightricks/LTX-2](https://github.com/Lightricks/LTX-2) на коммите `4f521619ae0029e8fbb64d555030c2b121a33b4f`. README рекомендует LTX-2.5, не 2.3. Код Apache-2.0. Веса отдельно, LTX-2.x Community License. Режиссёр их не скачивает.
+
+- `ltx.distilled` — текст или кадр `--image`. Исходное видео сюда не принимается.
+- `ltx.dfr` — то же семейство плюс detailing IC-LoRA. Это не правка чужого ролика.
+- `ltx.ic_lora` — видео по референс-видео `--video-conditioning`, свой IC-LoRA, по желанию маска и ключевые кадры. Это не замена товара как у Parrot и не блокировка текста упаковки.
+- `ltx.retake` — переснять интервал времени.
+
+Без CUDA, без пакета `ltx_pipelines` и без файлов в `LTX_MODEL_ROOT` ответ `ltx_not_ready`, MP4 не создаётся. `--quantization fp8-cast` и `--offload cpu|disk` уходят в официальный CLI только если их попросили. Минимальный VRAM в README не указан.
+
+Платный многопользовательский режим выключен. Attachment A(20) запрещает конкурирующий сервис без отдельной лицензии и не снимается порогом выручки в 10 млн долларов. Это не юридическое заключение. Реклама и подписки отсюда не запускаются.
+
+```bash
+git clone https://github.com/Lightricks/LTX-2.git
+git -C LTX-2 checkout 4f521619ae0029e8fbb64d555030c2b121a33b4f
+export LTX_PYTHON=python3
+export LTX_MODEL_ROOT=/path/to/models/ltx-2.5
+python -m director
+```
+
 ## Структура
 
 ```

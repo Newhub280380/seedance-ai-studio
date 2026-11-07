@@ -10,6 +10,7 @@ from director.catalog_data import load_catalog, max_input_images
 from director.comfy_gate import inspect_templates
 from director.errors import DirectorRefusal, TransportFailure
 from director.h3_lanes import COMMERCIAL, hosted_max_spec, static_lanes
+from director import ltx_route
 from director.pngutil import solid_png
 from director.prep_route import (
     ALPHA_BBOX_PAD,
@@ -64,6 +65,9 @@ class DirectorApp:
         self.minimax_transport = minimax_transport
         self.prep_photo_command = os.environ.get("DIRECTOR_PREP_PHOTO") or "prep_photo"
         self.prep_timeout = int(os.environ.get("DIRECTOR_PREP_TIMEOUT") or "900")
+        self.ltx_model_root = os.environ.get("LTX_MODEL_ROOT") or ""
+        self.ltx_python = os.environ.get("LTX_PYTHON") or "python3"
+        self.ltx_timeout = int(os.environ.get("LTX_TIMEOUT") or "3600")
 
     def capabilities(self):
         items = []
@@ -295,6 +299,8 @@ class DirectorApp:
             return self._run_max(task)
         if kind == "product_prep":
             return self._run_product_prep(task)
+        if kind == "ltx":
+            return self._run_ltx(task, spec)
         raise DirectorRefusal("not_executable", "This capability has no executor", 409)
 
     def _quote(self, task, spec):
@@ -738,7 +744,190 @@ class DirectorApp:
             return self._prepare_max(body)
         if kind == "product_prep":
             return self._prepare_product_prep(body)
+        if kind == "ltx":
+            return self._prepare_ltx(spec, body)
         raise DirectorRefusal("not_executable", "No preparer for this capability")
+
+    def _ltx_probe(self):
+        cached = getattr(self, "_ltx_probe_cached", None)
+        if cached is None:
+            cached = ltx_route.probe(self.ltx_model_root, self.ltx_python)
+            self._ltx_probe_cached = cached
+        return cached
+
+    def _prepare_ltx(self, spec, body):
+        if body.get("commercial_multiuser"):
+            raise DirectorRefusal(
+                "ltx_commercial_disabled",
+                ltx_route.ATTACHMENT_A20 + " Paid multi-user use stays off. This is not a legal clearance of a subscription product.",
+            )
+        if spec["id"] == "ltx.distilled" and (body.get("video_path") or body.get("video_asset_id")):
+            raise DirectorRefusal(
+                "not_temporal_edit",
+                "ltx.distilled is text or still-image to video. A source video is not accepted here and was not treated as object replacement. Use ltx.ic_lora or ltx.retake.",
+            )
+        prompt = body.get("prompt")
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise DirectorRefusal("prompt_required", "prompt is required", 400)
+        frames = body.get("num_frames", 121)
+        try:
+            frames = int(frames)
+        except (TypeError, ValueError) as exc:
+            raise DirectorRefusal("frames_rejected", "num_frames must be an integer of the form 8k+1.") from exc
+        if frames < 1 or (frames - 1) % 8 != 0:
+            raise DirectorRefusal("frames_rejected", "num_frames must be 8k+1, for example 121.")
+        images = []
+        if body.get("image_asset_id"):
+            images.append({"asset_id": body["image_asset_id"], "frame": int(body.get("frame", 0)), "strength": float(body.get("strength", 1.0))})
+        for item in body.get("images") or []:
+            if not isinstance(item, dict) or not item.get("asset_id"):
+                raise DirectorRefusal("image_rejected", "Each keyframe needs an asset_id.")
+            images.append({"asset_id": item["asset_id"], "frame": int(item.get("frame", 0)), "strength": float(item.get("strength", 1.0))})
+        if spec["id"] == "ltx.ic_lora" and not body.get("video_path"):
+            raise DirectorRefusal("video_conditioning_required", "ltx.ic_lora requires the source video. A still was not substituted for it.")
+        if spec["id"] == "ltx.ic_lora" and not body.get("lora_path"):
+            raise DirectorRefusal("lora_required", "ltx.ic_lora requires the path of an IC-LoRA under LTX_MODEL_ROOT.")
+        if spec["id"] == "ltx.retake":
+            if not body.get("video_path"):
+                raise DirectorRefusal("video_required", "ltx.retake requires the source video.")
+            start, end = body.get("start_time"), body.get("end_time")
+            if not isinstance(start, (int, float)) or not isinstance(end, (int, float)) or start >= end:
+                raise DirectorRefusal("retake_window_rejected", "start_time must be less than end_time.")
+        offload = body.get("offload")
+        if offload not in (None, "", "cpu", "disk"):
+            raise DirectorRefusal("offload_rejected", "offload must be cpu or disk, matching the official CLI.")
+        quant = body.get("quantization")
+        if quant not in (None, "", "fp8-cast"):
+            raise DirectorRefusal("quantization_rejected", "The only quantization flag wired here is fp8-cast.")
+        return {
+            "prompt": prompt.strip(),
+            "num_frames": frames,
+            "seed": int(body.get("seed", 42)),
+            "images": images,
+            "video_path": body.get("video_path"),
+            "mask_path": body.get("mask_path"),
+            "lora_path": body.get("lora_path"),
+            "video_strength": body.get("video_strength", 1.0),
+            "lora_strength": body.get("lora_strength", 1.0),
+            "mask_strength": body.get("mask_strength", 1.0),
+            "start_time": body.get("start_time"),
+            "end_time": body.get("end_time"),
+            "offload": offload or None,
+            "quantization": quant or None,
+            "enhance_prompt": False,
+            "model_root": self.ltx_model_root,
+            "license": {
+                "code": "Apache-2.0",
+                "weights": "LTX-2.x Community License",
+                "attachment_a20": ltx_route.ATTACHMENT_A20,
+                "revenue_note": "Section 2.1 requires a paid license at $10,000,000 annual revenue. Attachment A(20) is a separate competing-service limit and is not waived below that figure. This is not a legal verdict.",
+                "commercial_multiuser": "disabled",
+            },
+        }
+
+    def _run_ltx(self, task, spec):
+        if task["params"].get("license", {}).get("commercial_multiuser") == "disabled" and False:
+            pass
+        report = self._ltx_probe()
+        task["ltx"] = {
+            "pin": ltx_route.PIN,
+            "repo": ltx_route.REPO,
+            "module": spec["module"],
+            "temporal_edit": spec["temporal_edit"],
+            "ready": report["ready"],
+            "missing": report["missing"],
+            "measured_hosts": report["measured_hosts"],
+        }
+        if not report["ready"]:
+            task["status"] = "failed"
+            task["error"] = {
+                "code": "ltx_not_ready",
+                "message": "LTX was not started. Missing: " + "; ".join(report["missing"]),
+            }
+            return self.store.save(task)
+        if spec["id"] == "ltx.dfr":
+            lora = Path(self.ltx_model_root) / ltx_route.DFR_LORA
+            if not lora.is_file():
+                task["status"] = "failed"
+                task["error"] = {"code": "ltx_not_ready", "message": "Missing detailing IC-LoRA " + ltx_route.DFR_LORA}
+                return self.store.save(task)
+        try:
+            paths = self._ltx_paths(task, spec)
+        except DirectorRefusal as exc:
+            task["status"] = "failed"
+            task["error"] = {"code": exc.code, "message": exc.message}
+            return self.store.save(task)
+        work = self.data_dir / "ltx" / task["id"]
+        work.mkdir(parents=True, exist_ok=True)
+        output = work / "output.mp4"
+        params = dict(task["params"])
+        params["model_root"] = self.ltx_model_root
+        argv = ltx_route.build_argv(self.ltx_python, spec, paths, output, params)
+        task.setdefault("provider_calls", []).append({"argv": argv, "role": "ltx"})
+        task["status"] = "running"
+        self.store.save(task)
+        try:
+            code, stdout, stderr = ltx_route.run_once(argv, self.ltx_timeout)
+        except DirectorRefusal as exc:
+            task["status"] = "failed"
+            task["error"] = {"code": exc.code, "message": exc.message}
+            return self.store.save(task)
+        task["ltx"]["returncode"] = code
+        task["ltx"]["stderr_tail"] = stderr[-400:]
+        if code != 0 or not ltx_route.is_mp4(output):
+            task["status"] = "failed"
+            task["error"] = {
+                "code": "ltx_output_missing" if code == 0 else "ltx_failed",
+                "message": "No MP4 was stored. exit %s. %s" % (code, stderr[-240:]),
+            }
+            return self.store.save(task)
+        blob = output.read_bytes()
+        stored = self.results / (task["id"] + "-ltx.mp4")
+        stored.write_bytes(blob)
+        task["result"] = {
+            "role": "output",
+            "file": stored.name,
+            "media_type": "video/mp4",
+            "sha256": hashlib.sha256(blob).hexdigest(),
+            "bytes": len(blob),
+        }
+        task["results"] = [task["result"]]
+        task["status"] = "completed"
+        task["error"] = None
+        task["fidelity"] = "ltx_generative_not_label_lock"
+        return self.store.save(task)
+
+    def _ltx_paths(self, task, spec):
+        paths = {}
+        images = []
+        for item in task["params"]["images"]:
+            asset = self._require_asset(item["asset_id"])
+            folder = self.data_dir / "ltx" / task["id"]
+            folder.mkdir(parents=True, exist_ok=True)
+            target = folder / ("frame-%s.png" % item["frame"])
+            target.write_bytes(asset["data"])
+            images.append({"path": target, "frame": item["frame"], "strength": item["strength"]})
+        task["params"]["images"] = images
+        if task["params"].get("video_path"):
+            paths["video"] = self._inside_data(task["params"]["video_path"])
+        if task["params"].get("mask_path"):
+            paths["mask"] = self._inside_data(task["params"]["mask_path"])
+        if task["params"].get("lora_path"):
+            root = Path(self.ltx_model_root).resolve()
+            lora = Path(task["params"]["lora_path"]).resolve()
+            if root not in lora.parents or not lora.is_file():
+                raise DirectorRefusal("lora_missing", "IC-LoRA must be an existing file inside LTX_MODEL_ROOT.")
+            paths["lora"] = lora
+        return paths
+
+    def _inside_data(self, raw):
+        path = Path(raw).resolve()
+        root = self.data_dir.resolve()
+        if path != root and root not in path.parents:
+            raise DirectorRefusal("path_outside_data", "That file is outside the Director data directory.")
+        if not path.is_file():
+            raise DirectorRefusal("input_missing", "Input file is missing: " + path.name)
+        return path
 
     def _prepare_product_prep(self, body):
         if body.get("model") not in (None, "", "u2net"):
@@ -1318,6 +1507,19 @@ class DirectorApp:
                 "default_model": "u2net",
                 "models": [],
             },
+            *[{
+                "id": item["id"],
+                "title": item["title"],
+                "provider": "ltx_local",
+                "kind": "ltx",
+                "module": item["module"],
+                "temporal_edit": item["temporal_edit"],
+                "summary": item["summary"],
+                "skills": [],
+                "endpoint": "python -m " + item["module"],
+                "docs": ltx_route.REPO,
+                "models": [],
+            } for item in ltx_route.FAMILIES],
         ]
 
     def _public_capability(self, spec):
@@ -1325,6 +1527,9 @@ class DirectorApp:
         key_ok = (spec.get("provider") != "venice" or bool(self.venice_api_key)) and (spec.get("provider") != "minimax" or bool(self.minimax_api_key))
         if spec.get("provider") == "local_prep":
             status = "ready_to_confirm" if resolve_command(self.prep_photo_command) else "prep_command_missing"
+        elif spec.get("provider") == "ltx_local":
+            report = self._ltx_probe()
+            status = "ready_to_confirm" if report["ready"] else "ltx_not_ready"
         elif problems:
             status = "skill_integrity_failed"
         elif not key_ok:
@@ -1359,6 +1564,9 @@ class DirectorApp:
             "resolutions_rejected": spec.get("resolutions_rejected"),
             "camera_trajectory": spec.get("camera_trajectory", spec["id"] == "video.venice_camera"),
             "commercial_runtime": spec.get("commercial_runtime"),
+            "temporal_edit": spec.get("temporal_edit"),
+            "summary": spec.get("summary"),
+            "ltx": self._ltx_probe() if spec.get("provider") == "ltx_local" else None,
         }
 
     def _public_lane(self, lane):
