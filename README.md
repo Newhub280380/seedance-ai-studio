@@ -84,7 +84,17 @@ curl -sS -X POST http://127.0.0.1:8765/api/director/tasks \
   -d '{"capability":"image.product_prep","client_request_id":"zishel-prep-1","confirm":true,"original_asset_id":"<sha256>"}'
 ```
 
-Режиссёр сам вызывает две готовые команды: вырез `--upscale none --size 0` и итог `--upscale onnx --size 3840 --denoise none --bg transparent --model u2net`. Статус `completed` только если оба PNG с альфой, длинная сторона выреза равна кадру, а итог имеет длинную сторону 3840 без смены пропорций. Предупреждение CLI о fallback с ONNX на soft отклоняет итог.
+Режиссёр сам вызывает две готовые команды существующего скрипта. Сначала вырез `--upscale none --size 0`. По альфе больше 16, с запасом в 1 пиксель, из выреза берётся плотная рамка объекта. Затем тот же скрипт с `--already-cut --upscale onnx --size 3840 --denoise none --bg transparent --model u2net` увеличивает уже этот объект, а не холст с полями. Нативный вырез не перезаписывается и не прогоняется через апскейл второй раз. `completed` только если итог — PNG с альфой, длинная сторона холста 3840, пропорции объекта сохранены, а длинная сторона самого объекта не меньше 98% от 3840. Иначе `object_below_target` или `onnx_fallback`, без ложного успеха.
+
+`GET /api/director/tasks/<id>/result` для этой операции отдаёт итог. Нативный вырез: `?role=cutout` или `?index=0`. Плотная рамка до апскейла: `?role=tight`.
+
+На box для повторного прогона нужен скрипт из этого дерева, потому что у исходного `prep_photo` нет `--already-cut`, и существующий файл ONNX:
+
+```bash
+export DIRECTOR_PREP_PHOTO="$PWD/director/vendor/photo-prep/prep_photo"
+export PREP_ONNX_MODEL=/workspace/tools/realesrgan/realesrgan_x4plus_fp16.onnx
+python -m director
+```
 
 ## Структура
 

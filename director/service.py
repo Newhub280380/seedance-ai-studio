@@ -12,7 +12,11 @@ from director.errors import DirectorRefusal, TransportFailure
 from director.h3_lanes import COMMERCIAL, hosted_max_spec, static_lanes
 from director.pngutil import solid_png
 from director.prep_route import (
+    ALPHA_BBOX_PAD,
+    ALPHA_BBOX_THRESHOLD,
     LIMITS as PREP_LIMITS,
+    alpha_object_box,
+    assert_object_long_side,
     build_argv,
     gallery_chrome_crop,
     onnx_fallback,
@@ -231,14 +235,33 @@ class DirectorApp:
                 task["provider_cancel_body"] = payload
         return self.store.save(task)
 
-    def read_result(self, task_id, index=0):
+    def read_result(self, task_id, index=None, role=None):
         task = self.store.get(task_id)
         if task is None:
             raise DirectorRefusal("not_found", "Task not found", 404)
         results = task.get("results") or ([] if not task.get("result") else [task["result"]])
-        if index >= len(results):
+        if not results:
             raise DirectorRefusal("no_result", "No stored result for this task", 404)
-        item = results[index]
+        if role:
+            matches = [item for item in results if item.get("role") == role]
+            if not matches:
+                raise DirectorRefusal("no_result", "No stored result with role %s" % role, 404)
+            item = matches[-1]
+        elif index is not None:
+            if index < 0 or index >= len(results):
+                raise DirectorRefusal("no_result", "No stored result at index %s" % index, 404)
+            item = results[index]
+        elif task.get("capability") == "image.product_prep":
+            finals = [item for item in results if item.get("role") == "output"]
+            if not finals:
+                raise DirectorRefusal(
+                    "final_not_ready",
+                    "The 3840 object output is not stored. The native cutout was not returned in its place.",
+                    404,
+                )
+            item = finals[-1]
+        else:
+            item = results[0]
         path = self.results / item["file"]
         data = path.read_bytes()
         if hashlib.sha256(data).hexdigest() != item["sha256"]:
@@ -785,17 +808,61 @@ class DirectorApp:
             ))
             task["results"] = list(stored)
             self.store.save(task)
-            stored.append(self._invoke_prep(
-                task,
-                command,
-                crop_path,
-                output,
-                upscale="onnx",
-                size=3840,
-                expect_long_side=3840,
-                source_size=prep_input.size,
-                role="output",
-            ))
+            from PIL import Image as _Image
+            with _Image.open(cutout) as cut_image:
+                cut_image.load()
+                box = alpha_object_box(cut_image, ALPHA_BBOX_THRESHOLD, ALPHA_BBOX_PAD)
+                tight = cut_image.crop(box)
+                native_size = list(cut_image.size)
+            tight_path = work / "tight.png"
+            tight.save(tight_path, format="PNG")
+            tight_bytes = tight_path.read_bytes()
+            tight_stored = self.results / ("%s-tight.png" % task["id"])
+            tight_stored.write_bytes(tight_bytes)
+            stored.append({
+                "role": "tight",
+                "media_type": "image/png",
+                "width": tight.size[0],
+                "height": tight.size[1],
+                "file": tight_stored.name,
+                "sha256": hashlib.sha256(tight_bytes).hexdigest(),
+                "bytes": len(tight_bytes),
+            })
+            tight_long = max(tight.size)
+            task["prep"]["alpha_bbox"] = {
+                "threshold": ALPHA_BBOX_THRESHOLD,
+                "pad": ALPHA_BBOX_PAD,
+                "box": list(box),
+                "tight_size": list(tight.size),
+                "native_cutout_size": native_size,
+            }
+            task["results"] = list(stored)
+            self.store.save(task)
+            if tight_long >= 3840:
+                task["prep"]["upscale_skipped"] = "tight object long side is already %s; onnx was not run again" % tight_long
+                output.write_bytes(tight_path.read_bytes())
+                info = validate_png(output, expect_long_side=tight_long, source_size=tight.size)
+                metrics = assert_object_long_side(output, tight_long)
+                info.update({"role": "output", "media_type": "image/png", "object": metrics})
+                info["sha256"] = hashlib.sha256(output.read_bytes()).hexdigest()
+                stored_path = self.results / ("%s-output.png" % task["id"])
+                stored_path.write_bytes(output.read_bytes())
+                info["file"] = stored_path.name
+                stored.append(info)
+            else:
+                stored.append(self._invoke_prep(
+                    task,
+                    command,
+                    tight_path,
+                    output,
+                    upscale="onnx",
+                    size=3840,
+                    expect_long_side=3840,
+                    source_size=tight.size,
+                    role="output",
+                    already_cut=True,
+                    require_object_side=3840,
+                ))
         except DirectorRefusal as exc:
             task["results"] = stored
             if stored:
@@ -810,8 +877,8 @@ class DirectorApp:
         task["fidelity"] = "cutout_plus_predicted_detail_not_label_identity"
         return self.store.save(task)
 
-    def _invoke_prep(self, task, command, source, destination, *, upscale, size, expect_long_side, source_size, role):
-        argv = build_argv(command, source, destination, upscale=upscale, size=size)
+    def _invoke_prep(self, task, command, source, destination, *, upscale, size, expect_long_side, source_size, role, already_cut=False, require_object_side=None):
+        argv = build_argv(command, source, destination, upscale=upscale, size=size, already_cut=already_cut)
         task.setdefault("provider_calls", []).append({"argv": argv, "role": role})
         self.store.save(task)
         code, stdout, stderr = run_prep_command(argv, self.prep_timeout)
@@ -828,6 +895,8 @@ class DirectorApp:
                 "prep_photo fell back off the requested ONNX Real-ESRGAN path. The output was not accepted.",
             )
         info = validate_png(destination, expect_long_side=expect_long_side, source_size=source_size)
+        if require_object_side is not None:
+            info["object"] = assert_object_long_side(destination, require_object_side)
         info["role"] = role
         info["media_type"] = "image/png"
         info["sha256"] = hashlib.sha256(destination.read_bytes()).hexdigest()

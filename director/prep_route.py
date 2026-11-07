@@ -32,15 +32,21 @@ LIMITS = {
         "Edges are not a geometric guarantee. Alpha matting and decontamination flags are not passed."
     ),
     "upscale": (
-        "Real-ESRGAN x4plus predicts detail, then the existing tool fits the long side to the requested size with LANCZOS. "
-        "Printed letters can change. The native cutout is kept so the two files can be compared. Label identity is not claimed."
+        "Real-ESRGAN x4plus predicts detail. It runs only after a tight alpha crop, then the existing tool sets the long side to 3840. "
+        "Printed letters can change. The native full-canvas cutout is kept unchanged for comparison. Label identity is not claimed."
     ),
     "denoise": "none",
     "alpha_matting": False,
     "decontamination": False,
     "text_redraw": False,
     "label_check": "not_measured",
+    "alpha_bbox_threshold": 16,
+    "alpha_bbox_pad": 1,
+    "object_long_side_target": 3840,
 }
+
+ALPHA_BBOX_THRESHOLD = 16
+ALPHA_BBOX_PAD = 1
 
 
 def resolve_command(configured: str) -> str | None:
@@ -63,8 +69,8 @@ def gallery_chrome_crop(image: Image.Image) -> Image.Image | None:
     return rgb.crop(GALLERY_BOX)
 
 
-def build_argv(command: str, source: Path, output: Path, *, upscale: str, size: int, model: str = "u2net") -> list[str]:
-    return [
+def build_argv(command: str, source: Path, output: Path, *, upscale: str, size: int, model: str = "u2net", already_cut: bool = False) -> list[str]:
+    argv = [
         command,
         str(source),
         "-o",
@@ -82,6 +88,9 @@ def build_argv(command: str, source: Path, output: Path, *, upscale: str, size: 
         "--denoise",
         "none",
     ]
+    if already_cut:
+        argv.append("--already-cut")
+    return argv
 
 
 def run_prep_command(argv: list[str], timeout: int) -> tuple[int, str, str]:
@@ -107,6 +116,57 @@ def run_prep_command(argv: list[str], timeout: int) -> tuple[int, str, str]:
 
 def onnx_fallback(stderr: str) -> bool:
     return any(marker in stderr for marker in FALLBACK_MARKERS)
+
+
+def alpha_object_box(image: Image.Image, threshold: int = ALPHA_BBOX_THRESHOLD, pad: int = 0) -> tuple[int, int, int, int]:
+    """Box of pixels with alpha above the halo threshold. right/bottom are exclusive."""
+    mask = image.convert("RGBA").getchannel("A").point(lambda value: 255 if value > threshold else 0)
+    box = mask.getbbox()
+    if box is None:
+        raise DirectorRefusal("subject_missing", "No product pixels above the alpha threshold.")
+    left, top, right, bottom = box
+    width, height = image.size
+    if pad:
+        left = max(0, left - pad)
+        top = max(0, top - pad)
+        right = min(width, right + pad)
+        bottom = min(height, bottom + pad)
+    if right <= left or bottom <= top:
+        raise DirectorRefusal("subject_missing", "Alpha box collapsed.")
+    return left, top, right, bottom
+
+
+def measure_alpha(image: Image.Image, threshold: int = ALPHA_BBOX_THRESHOLD) -> dict:
+    width, height = image.size
+    left, top, right, bottom = alpha_object_box(image, threshold, pad=0)
+    object_width = right - left
+    object_height = bottom - top
+    return {
+        "threshold": threshold,
+        "bbox": [left, top, right, bottom],
+        "object_width": object_width,
+        "object_height": object_height,
+        "object_long_side": max(object_width, object_height),
+        "canvas": [width, height],
+        "margin_left": left,
+        "margin_top": top,
+        "margin_right": width - right,
+        "margin_bottom": height - bottom,
+    }
+
+
+def assert_object_long_side(path: Path, target: int, threshold: int = ALPHA_BBOX_THRESHOLD) -> dict:
+    with Image.open(path) as image:
+        image.load()
+        metrics = measure_alpha(image, threshold)
+    minimum = int(target * 0.98)
+    if metrics["object_long_side"] < minimum:
+        raise DirectorRefusal(
+            "object_below_target",
+            "Object long side is %s inside a %sx%s canvas. Target is %s. Transparent margins were not accepted as 4K."
+            % (metrics["object_long_side"], metrics["canvas"][0], metrics["canvas"][1], target),
+        )
+    return metrics
 
 
 def validate_png(path: Path, *, expect_long_side: int | None, source_size: tuple[int, int]) -> dict:

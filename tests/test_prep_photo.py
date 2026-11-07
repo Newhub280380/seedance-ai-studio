@@ -33,22 +33,25 @@ if mode == "fallback" and upscale == "onnx":
 with Image.open(source) as incoming:
     image = incoming.convert("RGBA")
     width, height = image.size
-if mode == "square" and upscale == "onnx":
+if upscale == "none":
+    margin = max(8, min(width, height) // 5)
+    canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    inner = image.crop((margin, margin, width - margin, height - margin))
+    opaque = Image.new("RGBA", inner.size, (30, 40, 50, 255))
+    canvas.paste(opaque, (margin, margin))
+    image = canvas
+elif mode == "loose_final" and upscale == "onnx":
+    image = Image.new("RGBA", (3840, 3840), (0, 0, 0, 0))
+    image.paste(Image.new("RGBA", (400, 400), (30, 40, 50, 255)), (1720, 1720))
+elif mode == "square" and upscale == "onnx":
     image = Image.new("RGBA", (size, size), (10, 10, 10, 255))
+    image.putpixel((0, 0), (0, 0, 0, 0))
 elif size:
     scale = size / float(max(width, height))
     image = image.resize((max(1, round(width * scale)), max(1, round(height * scale))))
 if mode == "rgb":
     image = image.convert("RGB")
-    pixels = image.load()
-    pixels[0, 0] = (0, 0, 0)
-else:
-    pixels = image.load()
-    pixels[0, 0] = (0, 0, 0, 0)
-    pixels[min(1, image.size[0] - 1), 0] = (20, 20, 20, 255)
 image.save(output, format="PNG")
-if mode == "crash" and upscale == "onnx":
-    raise SystemExit(2)
 """,
         encoding="utf-8",
     )
@@ -85,10 +88,27 @@ class PrepRouteTest(unittest.TestCase):
         })
         self.assertEqual(task["status"], "completed", task.get("error"))
         roles = [item["role"] for item in task["results"]]
-        self.assertEqual(roles, ["cutout", "output"])
+        self.assertEqual(roles, ["cutout", "tight", "output"])
         self.assertEqual(task["result"]["role"], "output")
-        self.assertEqual(max(task["results"][1]["width"], task["results"][1]["height"]), 3840)
-        self.assertLess(abs((task["results"][0]["width"] / task["results"][0]["height"]) - (task["results"][1]["width"] / task["results"][1]["height"])), 0.02)
+        self.assertGreaterEqual(task["result"]["object"]["object_long_side"], int(3840 * 0.98))
+        self.assertLessEqual(max(task["result"]["object"]["margin_left"], task["result"]["object"]["margin_right"], task["result"]["object"]["margin_top"], task["result"]["object"]["margin_bottom"]), int(3840 * 0.02))
+        output_call = [call for call in task["provider_calls"] if call["role"] == "output"][0]
+        self.assertIn("--already-cut", output_call["argv"])
+        self.assertTrue(output_call["argv"][1].endswith("tight.png"))
+        self.assertGreater(task["prep"]["alpha_bbox"]["native_cutout_size"][0], task["prep"]["alpha_bbox"]["tight_size"][0])
+        final = self.app.read_result(task["id"])[0]
+        native = self.app.read_result(task["id"], role="cutout")[0]
+        explicit_native = self.app.read_result(task["id"], index=0)[0]
+        self.assertNotEqual(final, native)
+        self.assertEqual(explicit_native, native)
+        self.assertTrue(final.startswith(b"\x89PNG"))
+        from director.server import DirectorHandler
+        handler = DirectorHandler(self.app, ROOT)
+        status, payload, _media = handler.handle("GET", "/api/director/tasks/%s/result" % task["id"], b"", {})
+        self.assertEqual(status, 200)
+        self.assertEqual(payload, final)
+        status, payload, _media = handler.handle("GET", "/api/director/tasks/%s/result?role=cutout" % task["id"], b"", {})
+        self.assertEqual(payload, native)
         joined = " ".join(" ".join(call["argv"]) for call in task["provider_calls"])
         self.assertIn("--denoise none", joined)
         self.assertIn("--bg transparent", joined)
@@ -98,8 +118,23 @@ class PrepRouteTest(unittest.TestCase):
         self.assertNotIn("--alpha-matting", joined)
         self.assertEqual(self.app.venice_transport.calls, [])
         self.assertEqual(task["fidelity"], "cutout_plus_predicted_detail_not_label_identity")
-        output = self.app.read_result(task["id"], 1)[0]
+        output = self.app.read_result(task["id"])[0]
         self.assertTrue(output.startswith(b"\x89PNG"))
+
+    def test_canvas_3840_with_small_object_is_not_success(self):
+        os.environ["MOCK_PREP_MODE"] = "loose_final"
+        task = self.app.create_task({
+            "capability": "image.product_prep",
+            "client_request_id": "prep-loose",
+            "confirm": True,
+            "original_asset_id": self._asset(),
+        })
+        self.assertEqual(task["status"], "failed")
+        self.assertEqual(task["error"]["code"], "object_below_target")
+        self.assertEqual(self.app.read_result(task["id"], role="cutout")[1], "image/png")
+        with self.assertRaises(DirectorRefusal) as caught:
+            self.app.read_result(task["id"])
+        self.assertEqual(caught.exception.code, "final_not_ready")
 
     def test_missing_alpha_is_not_success(self):
         os.environ["MOCK_PREP_MODE"] = "rgb"

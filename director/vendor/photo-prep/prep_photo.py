@@ -107,6 +107,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument("--tile", type=int, default=192, help="Размер тайла ONNX (меньше = меньше RAM)")
     p.add_argument("--tile-pad", type=int, default=16, help="Перекрытие тайлов ONNX")
+    p.add_argument(
+        "--already-cut",
+        action="store_true",
+        help="Вход уже вырезан (RGBA). Не вызывать rembg второй раз и не портить альфу denoise.",
+    )
     p.add_argument("-v", "--verbose", action="store_true")
     return p.parse_args(argv)
 
@@ -311,23 +316,27 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     upscale_mode = "none" if args.no_upscale else args.upscale
-    rembg = find_rembg()
 
     with tempfile.TemporaryDirectory(prefix="prep_photo_") as td:
         td_path = Path(td)
         cut = td_path / "cut.png"
         up = td_path / "up.png"
 
-        src = inp
-        if args.denoise == "whatsapp":
-            import cv2
-            log(args.verbose, "[0/3] denoise whatsapp: Gauss 0.8 + fastNlMeans")
-            arr = cv2.imread(str(inp), cv2.IMREAD_COLOR)
-            if arr is not None:
-                arr = cv2.fastNlMeansDenoisingColored(cv2.GaussianBlur(arr, (0, 0), 0.8), None, 5, 5, 7, 21)
-                src = td_path / "clean.png"
-                cv2.imwrite(str(src), arr)
-        rembg_cut(rembg, src, cut, args.model, args.verbose)
+        if args.already_cut:
+            log(args.verbose, "[1/3] rembg пропущен: вход уже вырезан")
+            shutil.copy(inp, cut)
+        else:
+            rembg = find_rembg()
+            src = inp
+            if args.denoise == "whatsapp":
+                import cv2
+                log(args.verbose, "[0/3] denoise whatsapp: Gauss 0.8 + fastNlMeans")
+                arr = cv2.imread(str(inp), cv2.IMREAD_COLOR)
+                if arr is not None:
+                    arr = cv2.fastNlMeansDenoisingColored(cv2.GaussianBlur(arr, (0, 0), 0.8), None, 5, 5, 7, 21)
+                    src = td_path / "clean.png"
+                    cv2.imwrite(str(src), arr)
+            rembg_cut(rembg, src, cut, args.model, args.verbose)
 
         if upscale_mode == "none":
             log(args.verbose, "[2/3] upscale пропущен")
