@@ -41,10 +41,7 @@ class DirectorHandler:
             if method == "POST" and route == "/api/director/fixtures/solid":
                 return 200, {"ok": True, "asset": self.app.solid_fixture()}, "application/json"
             if method == "POST" and route == "/api/director/assets":
-                payload = _json(body)
-                import base64
-                data = base64.b64decode(payload.get("content_base64") or "")
-                asset = self.app.put_asset(data, payload.get("media_type") or "image/png")
+                asset = self.app.put_asset_json(_json(body))
                 return 200, {"ok": True, "asset": asset}, "application/json"
             if method == "POST" and route == "/api/director/tasks":
                 task = self.app.create_task(_json(body))

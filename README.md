@@ -88,6 +88,49 @@ curl -sS -X POST http://127.0.0.1:8765/api/director/tasks \
 
 `GET /api/director/tasks/<id>/result` для этой операции отдаёт итог. Нативный вырез: `?role=cutout` или `?index=0`. Плотная рамка до апскейла: `?role=tight`.
 
+Real-ESRGAN здесь только увеличивает уже вырезанный объект. Он не смягчает морщины, не отбеливает зубы и не делает косметическую ретушь.
+
+## Человек или объект, затем отдельная правка Studio
+
+`image.subject_prep` — тот же `prep_photo` и та же модель `u2net` для `person`, `object` и `generic`. Отдельной модели лица нет. Лицо по загруженным файлам не угадывается. В репозитории нет портрета оператора, и публичный кадр сравнения Comfy не подставляется ни примером, ни значением по умолчанию.
+
+Подготовка не принимает промпт. Прозрачный PNG — мастер. JPEG на белом — тот же PNG без второго апскейла. Оригинал по sha256 не меняется. `upscale_backend` бывает `onnx`, `soft_fallback` или `skipped`. Мягкий запасной ресайз — это ошибка `onnx_fallback`, не успешный нейросетевой прогон. `neural_weights_observed` остаётся false: процесс не смотрит внутрь сессии ONNX.
+
+Косметическая правка — другая задача, `studio.image_edit`. Нужны файл референса и явный `prompt`. Пример промпта есть в `python -m director.preflight`. Пока его нет в теле задачи, он не отправляется. Результат правки — новый файл. PNG и JPEG подготовки не перезаписываются. Это не медицинский протокол: доз, карусели «до/после» и клинических полей нет.
+
+Правка картинки не требует MiniMax H3. Видео по референсу (`studio.reference_video`) и замена персонажа — отдельные необязательные маршруты, им нужен Ref2VA.
+
+Сухой прогон, без задач и без весов:
+
+```bash
+python -m director.preflight
+```
+
+`POST /api/director/assets` принимает только JSON. Сырой `image/jpeg` отвечает `bad_json`.
+
+```json
+{"media_type":"image/jpeg","content_base64":"<стандартный base64 байтов файла>"}
+```
+
+Ответ: `asset.id` и `asset.sha256` — sha256 этих байтов. Повтор тех же байтов возвращает тот же id. Пустое тело, не-картинка и размер больше 2000000 байт отвергаются. Лимита частоты нет. Дериватив 4K, который не влезает в этот предел, остаётся файлом результата и передаётся в Studio по `prep_task_id`, а не повторной заливкой в assets.
+
+```bash
+curl -sS -X POST http://127.0.0.1:8765/api/director/tasks \
+  -H 'Content-Type: application/json' \
+  -d '{"capability":"image.subject_prep","client_request_id":"portrait-prep-1","confirm":true,"subject":"person","original_asset_id":"<sha256 своего портрета>"}'
+```
+
+Промпт ретуши подставляется только руками, в отдельной задаче. `<prep-id>` — id завершённой подготовки. Пока Studio не отдал файл и Director его не проверил, статус не `completed`.
+
+```bash
+curl -sS -X POST http://127.0.0.1:8765/api/director/tasks \
+  -H 'Content-Type: application/json' \
+  -d '{"capability":"studio.image_edit","client_request_id":"portrait-edit-1","confirm":true,"prep_task_id":"<prep-id>","reference_role":"jpeg_white","image_model":"qwen","prompt":"<явный промпт из preflight>"}'
+curl -sS -X POST http://127.0.0.1:8765/api/director/tasks/<edit-id>/poll -H 'Content-Type: application/json' -d '{}'
+```
+
+Модель правки по умолчанию — Qwen-Image-2.1-Turbo (`image_model` `qwen`), скрипт Studio `scripts/edit.sh`. H3 для неё не нужен. Необязательные модели того же маршрута: `qwen-full` (`--image-edit`), `flux3k-fast` и `flux3k-full` (`--flux3`), `moss-image` (`--moss`). Видео по `<Picture 1>` требует MiniMax H3 Ref2VA (`oneshot-setup.sh --ref2va` или `oneshot-setup-spark.sh --ref2va` на CUDA) и не заменяет правку картинки.
+
 На box для повторного прогона нужен скрипт из этого дерева, потому что у исходного `prep_photo` нет `--already-cut`, и существующий файл ONNX:
 
 ```bash
@@ -140,7 +183,7 @@ bash scripts/app.sh
 
 `STUDIO_PIDFILE` — штатная ветка `scripts/app.sh`: она запускает `app/server.py` и не включает лаунчер, который сам обновляет дерево. Мозг по умолчанию только `local`. Облачные Claude и Codex в опросе этой машины не найдены, запасной отправки кадра им нет.
 
-Character Swap и Remove a person без весов отвечают `ready: false`. Remove a person — это дорисовка видео, не прозрачный вырез. Тот же вырез товара остаётся `image.product_prep`. `POST /api/slate/direct` в коде есть и из Режиссёра не вызывается: он стартует собственного режиссёра Studio.
+Character Swap и Remove a person без весов отвечают `ready: false`. Remove a person — это дорисовка видео, не прозрачный вырез. Вырез товара остаётся `image.product_prep`, вырез человека или объекта — `image.subject_prep`. Правка по файлу — `studio.image_edit` (`POST /api/jobs`, kind `edit`); она не идёт в H3. `POST /api/slate/direct` в коде есть и из Режиссёра не вызывается: он стартует собственного режиссёра Studio. Контрактные тесты подменяют Studio и не являются прогоном на GPU.
 
 ## Структура
 

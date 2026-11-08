@@ -1,11 +1,14 @@
 import base64
+import binascii
 import hashlib
 import os
+import urllib.error
+import urllib.parse
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from director.assets import AssetStore
+from director.assets import MAX_BYTES, POST_SCHEMA, AssetStore
 from director.catalog_data import load_catalog, max_input_images
 from director.comfy_gate import inspect_templates
 from director.errors import DirectorRefusal, TransportFailure
@@ -16,6 +19,8 @@ from director.prep_route import (
     ALPHA_BBOX_PAD,
     ALPHA_BBOX_THRESHOLD,
     LIMITS as PREP_LIMITS,
+    SUBJECT_LIMITS,
+    SUBJECTS,
     alpha_object_box,
     assert_object_long_side,
     build_argv,
@@ -24,7 +29,9 @@ from director.prep_route import (
     resolve_command,
     run_prep_command,
     validate_png,
+    write_jpeg_white,
 )
+from director.sniff import sniff_media
 from director.providers import MinimaxClient, VeniceClient
 from director.skills import load_skills, skills_ready
 from director.store import TaskStore
@@ -93,13 +100,59 @@ class DirectorApp:
                 "VENICE_API_KEY": "present" if self.venice_api_key else "missing",
                 "MINIMAX_API_KEY": "present" if self.minimax_api_key else "missing",
             },
+            "assets": POST_SCHEMA,
+            "production_identity": studio_route.PRODUCTION_IDENTITY,
+            "beauty_retouch": {
+                "applied_by_default": False,
+                "performed_by_prep": False,
+                "performed_by_realesrgan": False,
+                "route": "studio.image_edit",
+                "prompt_example": studio_route.BEAUTY_RETOUCH_PROMPT_EXAMPLE,
+                "medical_claim": False,
+                "note": "The example is sent only when the task body contains that prompt. Prep does not call Studio.",
+            },
             "capabilities": items,
         }
 
+    def put_asset_json(self, payload):
+        if not isinstance(payload, dict):
+            raise DirectorRefusal("bad_json", "JSON object required", 400)
+        raw = payload.get("content_base64")
+        if not isinstance(raw, str) or not raw:
+            raise DirectorRefusal("asset_empty", "content_base64 is required and must be a non-empty string.", 400)
+        if raw.startswith("data:") or any(char.isspace() for char in raw):
+            raise DirectorRefusal("bad_base64", "Send standard base64 of the file bytes, not a data URL and not wrapped text.", 400)
+        try:
+            data = base64.b64decode(raw, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise DirectorRefusal("bad_base64", "content_base64 is not valid base64.", 400) from exc
+        media = payload.get("media_type") or "image/png"
+        return self.put_asset(data, media)
+
     def put_asset(self, data, media_type):
+        if media_type == "image/jpg":
+            media_type = "image/jpeg"
         if media_type not in ("image/png", "image/jpeg", "image/webp"):
             raise DirectorRefusal("unsupported_media_type", "This slice stores png, jpeg or webp originals.", 400)
-        return self.assets.put(data, media_type)
+        if not isinstance(data, (bytes, bytearray)) or not data:
+            raise DirectorRefusal("asset_empty", "The decoded image is empty.", 400)
+        if len(data) > MAX_BYTES:
+            raise DirectorRefusal(
+                "asset_too_large",
+                "Decoded image is %s bytes. The limit is %s. A 4K derivative stays a prep result file and is not posted back here." % (len(data), MAX_BYTES),
+                400,
+            )
+        sniffed = sniff_media(data)
+        if sniffed not in ("image/png", "image/jpeg", "image/webp"):
+            raise DirectorRefusal("bad_reference", "Decoded bytes are not a png, jpeg or webp.", 400)
+        if sniffed != media_type:
+            raise DirectorRefusal("media_type_mismatch", "media_type %s does not match the file bytes (%s)." % (media_type, sniffed), 400)
+        try:
+            record = self.assets.put(data, media_type)
+        except ValueError as exc:
+            raise DirectorRefusal("asset_rejected", str(exc), 400) from exc
+        record["identity_inferred"] = False
+        return record
 
     def solid_fixture(self):
         record = self.assets.put(solid_png(), "image/png")
@@ -177,7 +230,7 @@ class DirectorApp:
         task = self.store.get(task_id)
         if task is None:
             raise DirectorRefusal("not_found", "Task not found", 404)
-        if task["status"] in ("completed", "queued", "processing", "failed", "refused", "submit_uncertain", "cancelled", "cancel_requested"):
+        if task["status"] in ("completed", "queued", "processing", "failed", "refused", "submit_uncertain", "cancelled", "cancel_requested", "upstream_accepted"):
             return task
         if task["status"] == "partial" and not continue_remaining:
             return task
@@ -209,6 +262,8 @@ class DirectorApp:
             return self._poll_venice(task)
         if task["provider"] == "minimax":
             return self._poll_minimax(task)
+        if task["provider"] == "imagination_studio":
+            return self._poll_studio(task)
         task["error"] = {"code": "poll_not_supported", "message": "This lane has no provider poll."}
         return self.store.save(task)
 
@@ -257,7 +312,7 @@ class DirectorApp:
             if index < 0 or index >= len(results):
                 raise DirectorRefusal("no_result", "No stored result at index %s" % index, 404)
             item = results[index]
-        elif task.get("capability") == "image.product_prep":
+        elif task.get("capability") in ("image.product_prep", "image.subject_prep"):
             finals = [item for item in results if item.get("role") == "output"]
             if not finals:
                 raise DirectorRefusal(
@@ -299,7 +354,7 @@ class DirectorApp:
             return self._run_explainer(task)
         if kind == "h3_max_hosted":
             return self._run_max(task)
-        if kind == "product_prep":
+        if kind in ("product_prep", "subject_prep"):
             return self._run_product_prep(task)
         if kind == "ltx":
             return self._run_ltx(task, spec)
@@ -748,6 +803,8 @@ class DirectorApp:
             return self._prepare_max(body)
         if kind == "product_prep":
             return self._prepare_product_prep(body)
+        if kind == "subject_prep":
+            return self._prepare_subject_prep(body)
         if kind == "ltx":
             return self._prepare_ltx(spec, body)
         if kind == "studio":
@@ -767,6 +824,14 @@ class DirectorApp:
                 "private_face_refused",
                 "A private face is not uploaded to Studio or to a cloud brain from this adapter.",
             )
+        clinical = [key for key in studio_route.CLINICAL_KEYS if key in body]
+        if clinical:
+            raise DirectorRefusal(
+                "clinical_protocol_rejected",
+                "This route does not record a clinical protocol, a dose, or a before/after carousel. Those fields were not stored.",
+            )
+        if spec["id"] in ("studio.image_edit", "studio.reference_video"):
+            return self._prepare_studio_reference(spec, body)
         upstream = body.get("studio_params") or {}
         if not isinstance(upstream, dict):
             raise DirectorRefusal("studio_params_rejected", "studio_params must be an object.")
@@ -780,7 +845,116 @@ class DirectorApp:
             "upstream_params": upstream,
         }
 
+    def _prepare_studio_reference(self, spec, body):
+        video = spec["id"] == "studio.reference_video"
+        if body.get("studio_params"):
+            raise DirectorRefusal(
+                "studio_params_rejected",
+                "This route uploads the reference file itself. studio_params cannot point Studio at a different file.",
+            )
+        if body.get("beauty_retouch") and not (isinstance(body.get("prompt"), str) and body.get("prompt").strip()):
+            raise DirectorRefusal(
+                "prompt_required",
+                "A beauty retouch is not implied. Send the explicit prompt. Prep and Real-ESRGAN do not apply one.",
+                400,
+            )
+        prompt = body.get("prompt")
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise DirectorRefusal(
+                "prompt_required",
+                "prompt is required. The reference file is uploaded separately and is not replaced by a default retouch.",
+                400,
+            )
+        prompt = prompt.strip()
+        asset_id = body.get("reference_asset_id")
+        prep_id = body.get("prep_task_id")
+        if bool(asset_id) == bool(prep_id):
+            raise DirectorRefusal(
+                "reference_required",
+                "Provide reference_asset_id or prep_task_id, and not both. There is no default portrait. A prompt alone is not sent.",
+            )
+        extras = body.get("extra_reference_asset_ids") or []
+        if not isinstance(extras, list) or any(not isinstance(item, str) or not item for item in extras):
+            raise DirectorRefusal("reference_rejected", "extra_reference_asset_ids must be a list of asset ids.")
+        if len(extras) > 9:
+            raise DirectorRefusal("too_many_references", "At most 9 extra reference pictures. None were dropped.")
+        ids = ([asset_id] if asset_id else []) + extras
+        if len(set(ids)) != len(ids):
+            raise DirectorRefusal("reference_rejected", "A reference asset id was repeated.")
+        role = body.get("reference_role") or ("jpeg_white" if prep_id else None)
+        if prep_id:
+            if extras:
+                raise DirectorRefusal(
+                    "reference_rejected",
+                    "Extra references are separate asset ids. prep_task_id selects one prepared derivative.",
+                )
+            if role not in ("jpeg_white", "output"):
+                raise DirectorRefusal(
+                    "reference_role_rejected",
+                    "reference_role is jpeg_white or output, the PNG master. cutout and tight are not sent.",
+                )
+            data, media = self._prep_reference_bytes(prep_id, role)
+        else:
+            data, media = self._reference_asset_bytes(asset_id)
+            for item in extras:
+                self._reference_asset_bytes(item)
+        if video:
+            for index in range(1, 2 + len(extras)):
+                tag = "<Picture %s>" % index
+                if tag not in prompt:
+                    raise DirectorRefusal(
+                        "picture_tag_required",
+                        "The Ref2VA prompt must contain %s. The picture file is uploaded as well; the tag is not a substitute." % tag,
+                    )
+            if body.get("image_model"):
+                raise DirectorRefusal(
+                    "model_not_this_lane",
+                    "studio.reference_video uses MiniMax H3 Ref2VA. An image model was not substituted.",
+                )
+            seconds = body.get("seconds", 5)
+            if seconds not in studio_route.CLASSIC_SECONDS:
+                raise DirectorRefusal(
+                    "seconds_rejected",
+                    "seconds must be 5, 8, 10 or 15. Those are the classic single-clip lengths in the pinned Studio.",
+                )
+        else:
+            seconds = None
+            model = body.get("image_model") or "qwen"
+            if model not in studio_route.IMAGE_EDIT_MODELS:
+                raise DirectorRefusal(
+                    "model_not_allowlisted",
+                    "image_model must be one of %s. No other model was chosen." % ", ".join(studio_route.IMAGE_EDIT_MODELS),
+                )
+        seed = body.get("seed", 0)
+        if isinstance(seed, bool) or not isinstance(seed, int):
+            raise DirectorRefusal("seed_rejected", "seed must be an integer.")
+        params = {
+            "prompt": prompt,
+            "prompt_source": "request",
+            "reference_asset_id": asset_id,
+            "prep_task_id": prep_id,
+            "reference_role": role if prep_id else None,
+            "reference_sha256": hashlib.sha256(data).hexdigest(),
+            "reference_media_type": media,
+            "extra_reference_asset_ids": extras,
+            "seed": seed,
+            "needs_h3": video,
+            "studio_kind": "video" if video else "edit",
+            "identity_inferred": False,
+            "default_portrait": None,
+            "beauty_retouch_applied_by_default": False,
+            "medical_claim": False,
+            "retouch_separate_from_prep": True,
+        }
+        if video:
+            params["seconds"] = seconds
+        else:
+            params["image_model"] = body.get("image_model") or "qwen"
+        return params
+
     def _run_studio(self, task, spec):
+        if spec["id"] in ("studio.image_edit", "studio.reference_video"):
+            return self._run_studio_reference(task, spec)
         report = self._studio_probe()
         info = studio_route.brief(report)
         task["studio"] = info
@@ -818,19 +992,312 @@ class DirectorApp:
             task["error"] = {"code": "studio_renderer_unavailable", "message": "This Studio operation is not submitted from Director."}
             return self.store.save(task)
         kind_name = "swap" if spec["id"] == "studio.swap" else "remove"
-        call = self.studio_transport or studio_route.request_json
-        status, payload = call("POST", self.studio_url.rstrip("/") + "/api/jobs", {"kind": kind_name, "params": task["params"].get("upstream_params") or {}}, 15)
+        try:
+            status, payload = self._studio_call(
+                "POST",
+                self.studio_url.rstrip("/") + "/api/jobs",
+                {"kind": kind_name, "params": task["params"].get("upstream_params") or {}},
+                15,
+            )
+        except DirectorRefusal as exc:
+            task["status"] = "submit_uncertain"
+            task["error"] = {"code": "submit_uncertain", "message": exc.message + " The request was not retried."}
+            return self.store.save(task)
         task.setdefault("provider_calls", []).append({"method": "POST", "path": "/api/jobs", "kind": kind_name, "http_status": status})
         if status >= 400 or not isinstance(payload, dict) or not payload.get("id"):
             task["status"] = "failed"
-            message = payload.get("error") if isinstance(payload, dict) else str(payload)
-            task["error"] = {"code": "studio_rejected", "message": str(message)[:500]}
+            task["error"] = {"code": "studio_rejected", "message": _studio_error(payload)}
             return self.store.save(task)
         task["status"] = "upstream_accepted"
         task["error"] = None
-        task["upstream_job"] = {"id": payload.get("id"), "status": payload.get("status")}
+        task["max_polls"] = studio_route.MAX_POLLS
+        task["provider_task_id"] = payload.get("id")
+        task["artifact_kind"] = "video"
+        task["upstream_job"] = {"id": payload.get("id"), "status": payload.get("status"), "outputs": []}
         task["fidelity"] = "studio_generative_not_identity_lock"
         return self.store.save(task)
+
+    def _run_studio_reference(self, task, spec):
+        report = self._studio_probe()
+        info = studio_route.brief(report)
+        task["studio"] = info
+        task["max_polls"] = studio_route.MAX_POLLS
+        video = spec["id"] == "studio.reference_video"
+        prep_hashes = self._prep_hash_snapshot(task["params"].get("prep_task_id"))
+        if not info["reachable"]:
+            task["status"] = "failed"
+            task["error"] = {
+                "code": "studio_unavailable",
+                "message": "Imagination Studio is not answering at %s. %s" % (self.studio_url, info["error"]),
+            }
+            return self.store.save(task)
+        if video and not info["ref2va"]:
+            task["status"] = "failed"
+            task["error"] = {
+                "code": "studio_renderer_unavailable",
+                "message": "MiniMax H3 Ref2VA is not installed. The reference video was not submitted. Image edit does not use this weight.",
+            }
+            return self.store.save(task)
+        if not video and not info["edit_ready"]:
+            task["status"] = "failed"
+            task["error"] = {
+                "code": "studio_renderer_unavailable",
+                "message": info["edit_why"] or "Studio image edit is not ready. Ref2VA was not required and was not called.",
+            }
+            return self.store.save(task)
+        if not video:
+            models = info.get("edit_models") or []
+            requested = task["params"]["image_model"]
+            if models and requested not in models:
+                task["status"] = "failed"
+                task["error"] = {
+                    "code": "model_not_installed",
+                    "message": "Studio edit offers %s. %s was not substituted." % (", ".join(models), requested),
+                }
+                return self.store.save(task)
+        try:
+            files = []
+            if task["params"].get("prep_task_id"):
+                files.append(self._prep_reference_bytes(task["params"]["prep_task_id"], task["params"]["reference_role"]))
+            else:
+                files.append(self._reference_asset_bytes(task["params"]["reference_asset_id"]))
+                for item in task["params"]["extra_reference_asset_ids"]:
+                    files.append(self._reference_asset_bytes(item))
+            paths = []
+            for index, (data, media) in enumerate(files):
+                filename = "reference-%s%s" % (index + 1, studio_route.suffix_for(media))
+                status, payload = self._studio_call(
+                    "POST",
+                    self.studio_url.rstrip("/") + "/api/upload",
+                    ("file", filename, data, media),
+                    60,
+                )
+                task.setdefault("provider_calls", []).append({
+                    "method": "POST",
+                    "path": "/api/upload",
+                    "bytes": len(data),
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                    "http_status": status,
+                })
+                if status >= 400 or not isinstance(payload, dict):
+                    task["status"] = "failed"
+                    task["error"] = {"code": "studio_upload_rejected", "message": _studio_error(payload)}
+                    return self.store.save(task)
+                try:
+                    relative = studio_route.studio_relative(payload.get("path"))
+                except ValueError:
+                    task["status"] = "failed"
+                    task["error"] = {
+                        "code": "studio_upload_rejected",
+                        "message": "Studio upload did not return a safe relative path. The job was not submitted.",
+                    }
+                    return self.store.save(task)
+                paths.append(relative)
+            params = task["params"]
+            if video:
+                job = {
+                    "kind": "video",
+                    "params": {
+                        "prompt": params["prompt"],
+                        "references": paths,
+                        "seconds": params["seconds"],
+                        "seed": params["seed"],
+                    },
+                }
+            else:
+                job = {
+                    "kind": "edit",
+                    "params": {
+                        "prompt": params["prompt"],
+                        "image": paths[0],
+                        "seed": params["seed"],
+                        "image_model": params["image_model"],
+                    },
+                }
+                if len(paths) > 1:
+                    job["params"]["images"] = paths[1:]
+            status, payload = self._studio_call("POST", self.studio_url.rstrip("/") + "/api/jobs", job, 30)
+            task.setdefault("provider_calls", []).append({
+                "method": "POST",
+                "path": "/api/jobs",
+                "kind": job["kind"],
+                "http_status": status,
+                "body": job,
+            })
+            if status >= 400 or not isinstance(payload, dict) or not payload.get("id"):
+                task["status"] = "failed"
+                task["error"] = {"code": "studio_rejected", "message": _studio_error(payload)}
+                return self.store.save(task)
+        except DirectorRefusal as exc:
+            task["status"] = "submit_uncertain" if exc.code == "studio_transport_failed" else "failed"
+            task["error"] = {
+                "code": "submit_uncertain" if exc.code == "studio_transport_failed" else exc.code,
+                "message": exc.message + " The request was not retried.",
+            }
+            return self.store.save(task)
+        if prep_hashes is not None and prep_hashes != self._prep_hash_snapshot(task["params"].get("prep_task_id")):
+            task["status"] = "failed"
+            task["error"] = {
+                "code": "prep_hash_changed",
+                "message": "The prepared files changed while the edit was submitted. The edit was not marked finished.",
+            }
+            return self.store.save(task)
+        task["prep_snapshot"] = prep_hashes
+        task["prep_hashes_unchanged"] = True
+        task["status"] = "upstream_accepted"
+        task["error"] = None
+        task["provider_task_id"] = payload.get("id")
+        task["upstream_job"] = {"id": payload.get("id"), "status": payload.get("status"), "outputs": payload.get("outputs") or []}
+        task["artifact_kind"] = "video" if video else "image"
+        task["result"] = None
+        task["fidelity"] = "studio_generative_reference_not_identity_lock"
+        return self.store.save(task)
+
+    def _poll_studio(self, task):
+        job_id = task["provider_task_id"]
+        try:
+            status, payload = self._studio_call(
+                "GET",
+                self.studio_url.rstrip("/") + "/api/jobs/" + urllib.parse.quote(str(job_id), safe=""),
+                None,
+                30,
+            )
+        except DirectorRefusal as exc:
+            task["error"] = {"code": "studio_poll_failed", "message": exc.message + " The job was not submitted again."}
+            return self.store.save(task)
+        task.setdefault("provider_calls", []).append({"method": "GET", "path": "/api/jobs/{id}", "http_status": status})
+        if status == 404:
+            task["status"] = "failed"
+            task["error"] = {"code": "studio_job_missing", "message": "Studio has no job %s. It was not submitted again." % job_id}
+            return self.store.save(task)
+        if status >= 400 or not isinstance(payload, dict):
+            task["error"] = {"code": "studio_poll_failed", "message": _studio_error(payload) + " The job was not submitted again."}
+            return self.store.save(task)
+        upstream = payload.get("status")
+        task["upstream_job"] = {"id": job_id, "status": upstream, "outputs": payload.get("outputs") or []}
+        if upstream in ("queued", "running"):
+            task["status"] = "upstream_accepted"
+            task["error"] = None
+            return self.store.save(task)
+        if upstream == "cancelled":
+            task["status"] = "failed"
+            task["error"] = {"code": "studio_cancelled", "message": "Studio cancelled the job. No artifact was stored."}
+            return self.store.save(task)
+        if upstream == "failed":
+            task["status"] = "failed"
+            task["error"] = {"code": "studio_failed", "message": str(payload.get("error") or "Studio failed the job.")[:500]}
+            return self.store.save(task)
+        if upstream != "done":
+            task["error"] = {
+                "code": "studio_status_unknown",
+                "message": "Studio status %s is not a finished file. Not marked completed." % upstream,
+            }
+            return self.store.save(task)
+        outputs = payload.get("outputs") or []
+        if not outputs or not isinstance(outputs[0], str):
+            task["error"] = {
+                "code": "artifact_not_ready",
+                "message": "Studio status is done but outputs is empty. Not marked finished. Poll again. The job was not submitted again.",
+            }
+            return self.store.save(task)
+        try:
+            relative = studio_route.studio_relative(outputs[0])
+        except ValueError:
+            task["status"] = "failed"
+            task["error"] = {"code": "artifact_invalid", "message": "Studio output path was rejected. Not marked finished."}
+            return self.store.save(task)
+        try:
+            file_status, blob = self._studio_call("GET", studio_route.file_url(self.studio_url, relative), None, 60)
+        except DirectorRefusal as exc:
+            task["error"] = {"code": "artifact_not_ready", "message": exc.message + " Not marked finished. The job was not submitted again."}
+            return self.store.save(task)
+        task.setdefault("provider_calls", []).append({"method": "GET", "path": "/files/" + relative, "http_status": file_status})
+        if file_status != 200 or not isinstance(blob, (bytes, bytearray)) or not blob:
+            task["error"] = {
+                "code": "artifact_not_ready",
+                "message": "Studio status is done but the file is not readable yet. Not marked finished. Poll again. The job was not submitted again.",
+            }
+            return self.store.save(task)
+        media = sniff_media(bytes(blob))
+        expected = task.get("artifact_kind")
+        if expected == "image" and media not in ("image/png", "image/jpeg", "image/webp"):
+            task["status"] = "failed"
+            task["error"] = {"code": "artifact_invalid", "message": "The Studio file is not a png, jpeg or webp. Not marked finished."}
+            return self.store.save(task)
+        if expected == "video" and media != "video/mp4":
+            task["status"] = "failed"
+            task["error"] = {"code": "artifact_invalid", "message": "The Studio file is not an MP4. Not marked finished."}
+            return self.store.save(task)
+        if task.get("prep_snapshot") is not None and self._prep_hash_snapshot(task["params"].get("prep_task_id")) != task["prep_snapshot"]:
+            task["status"] = "failed"
+            task["error"] = {"code": "prep_hash_changed", "message": "Prepared files changed before the edit result was stored. They were not overwritten."}
+            return self.store.save(task)
+        item = self._write_result("%s-studio%s" % (task["id"], studio_route.suffix_for(media)), bytes(blob), media)
+        item["role"] = "output"
+        item["studio_path"] = relative
+        item["separate_from_prep"] = True
+        task["result"] = item
+        task["results"] = [item]
+        task["status"] = "completed"
+        task["error"] = None
+        task["prep_hashes_unchanged"] = True
+        task["fidelity"] = task.get("fidelity") or "studio_generative_reference_not_identity_lock"
+        return self.store.save(task)
+
+    def _studio_call(self, method, url, body, timeout):
+        call = self.studio_transport or studio_route.exchange
+        try:
+            return call(method, url, body, timeout)
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+            raise DirectorRefusal("studio_transport_failed", "Studio did not answer: %s" % exc) from exc
+
+    def _reference_asset_bytes(self, asset_id):
+        asset = self._require_asset(asset_id)
+        media = sniff_media(asset["data"])
+        if media not in ("image/png", "image/jpeg", "image/webp"):
+            raise DirectorRefusal("bad_reference", "The reference is empty or not a png, jpeg or webp. It was not uploaded.")
+        return asset["data"], media
+
+    def _prep_reference_bytes(self, task_id, role):
+        task = self.store.get(task_id)
+        if task is None:
+            raise DirectorRefusal("prep_not_found", "prep_task_id is not a local task.", 404)
+        if task.get("capability") not in ("image.subject_prep", "image.product_prep"):
+            raise DirectorRefusal("prep_not_ready", "prep_task_id is not a prep task.")
+        if task.get("status") != "completed":
+            raise DirectorRefusal("prep_not_ready", "The prep task is not completed. Its partial cutout was not sent.")
+        matches = [item for item in task.get("results") or [] if item.get("role") == role]
+        if not matches:
+            raise DirectorRefusal("bad_reference", "The prep task has no %s derivative." % role, 404)
+        item = matches[-1]
+        path = self.results / item["file"]
+        if not path.is_file():
+            raise DirectorRefusal("bad_reference", "The prepared file is missing.", 404)
+        data = path.read_bytes()
+        if not data or hashlib.sha256(data).hexdigest() != item.get("sha256"):
+            raise DirectorRefusal("bad_reference", "The prepared file does not match its recorded hash. It was not uploaded.")
+        media = sniff_media(data)
+        if media is None or media != item.get("media_type"):
+            raise DirectorRefusal("bad_reference", "The prepared file is not the recorded image type. It was not uploaded.")
+        return data, media
+
+    def _prep_hash_snapshot(self, task_id):
+        if not task_id:
+            return None
+        task = self.store.get(task_id)
+        if task is None:
+            return None
+        hashes = []
+        for item in task.get("results") or []:
+            path = self.results / item.get("file", "")
+            if not path.is_file():
+                return None
+            data = path.read_bytes()
+            if hashlib.sha256(data).hexdigest() != item.get("sha256"):
+                return None
+            hashes.append((item.get("role"), item.get("sha256")))
+        original = (task.get("prep") or {}).get("original_sha256")
+        return {"results": [{"role": role, "sha256": digest} for role, digest in hashes], "original_sha256": original}
 
     def _ltx_probe(self):
         cached = getattr(self, "_ltx_probe_cached", None)
@@ -1032,7 +1499,49 @@ class DirectorApp:
             "bg": "transparent",
             "format": "png",
             "prompt_used": False,
+            "beauty_retouch": False,
+            "realesrgan_is_beauty_retouch": False,
+            "generative": False,
+            "identity_inferred": False,
             "limits": PREP_LIMITS,
+        }
+
+    def _prepare_subject_prep(self, body):
+        subject = body.get("subject")
+        if subject not in SUBJECTS:
+            raise DirectorRefusal(
+                "subject_required",
+                "subject is person, object or generic. All three use rembg u2net. No face-specific model is substituted, and no portrait is inferred.",
+            )
+        if body.get("model") not in (None, "", "u2net"):
+            raise DirectorRefusal(
+                "model_not_this_lane",
+                "image.subject_prep calls prep_photo with rembg u2net. u2net_human_seg and other models are not substituted.",
+            )
+        if body.get("upscale") not in (None, "", "onnx"):
+            raise DirectorRefusal("upscale_rejected", "This prep route uses --upscale onnx. A different upscaler was not substituted.")
+        if body.get("size") not in (None, "", 3840, "3840"):
+            raise DirectorRefusal("size_rejected", "The long side for this route is 3840. Another size was not substituted.")
+        if body.get("prompt") or body.get("beauty_retouch"):
+            raise DirectorRefusal(
+                "prep_is_not_retouch",
+                "Prep does not accept a prompt or a beauty retouch. Real-ESRGAN only upscales the cutout. Send studio.image_edit with an explicit prompt for a cosmetic edit.",
+            )
+        return {
+            "original_asset_id": self._one_asset(body.get("original_asset_id")),
+            "subject": subject,
+            "model": "u2net",
+            "size": 3840,
+            "upscale": "onnx",
+            "denoise": "none",
+            "bg": "transparent",
+            "format": "png",
+            "prompt_used": False,
+            "beauty_retouch": False,
+            "realesrgan_is_beauty_retouch": False,
+            "generative": False,
+            "identity_inferred": False,
+            "limits": SUBJECT_LIMITS,
         }
 
     def _run_product_prep(self, task):
@@ -1060,8 +1569,21 @@ class DirectorApp:
             "command": command,
             "gallery_chrome_crop": cropped is not None,
             "crop_size": list(prep_input.size),
-            "limits": PREP_LIMITS,
+            "limits": task["params"].get("limits") or PREP_LIMITS,
+            "original_sha256": asset["sha256"],
+            "original_bytes": asset["bytes"],
+            "beauty_retouch": False,
+            "realesrgan_is_beauty_retouch": False,
+            "generative": False,
+            "identity_inferred": False,
         }
+        if task["capability"] == "image.subject_prep":
+            task["prep"].update({
+                "subject": task["params"]["subject"],
+                "mask_model": "u2net",
+                "face_restoration": False,
+                "anatomy_invented": False,
+            })
         task["status"] = "running"
         self.store.save(task)
         cutout = work / "cutout.png"
@@ -1113,6 +1635,10 @@ class DirectorApp:
             self.store.save(task)
             if tight_long >= 3840:
                 task["prep"]["upscale_skipped"] = "tight object long side is already %s; onnx was not run again" % tight_long
+                task["prep"]["upscale_backend"] = "skipped"
+                task["prep"]["upscale_fallback"] = False
+                task["prep"]["neural_upscale_accepted"] = False
+                task["prep"]["neural_weights_observed"] = False
                 output.write_bytes(tight_path.read_bytes())
                 info = validate_png(output, expect_long_side=tight_long, source_size=tight.size)
                 metrics = assert_object_long_side(output, tight_long)
@@ -1136,6 +1662,15 @@ class DirectorApp:
                     already_cut=True,
                     require_object_side=3840,
                 ))
+            if task["capability"] == "image.subject_prep":
+                self._remember_asset(stored[-1], output.read_bytes(), "image/png")
+                stored.append(self._jpeg_white_derivative(task, output))
+            fresh = self.assets.get(asset["id"])
+            if fresh is None or fresh["data"] != asset["data"] or fresh["sha256"] != asset["sha256"]:
+                raise DirectorRefusal(
+                    "original_hash_changed",
+                    "The stored original changed during prep. The result was not marked successful.",
+                )
         except DirectorRefusal as exc:
             task["results"] = stored
             if stored:
@@ -1144,11 +1679,43 @@ class DirectorApp:
             task["error"] = {"code": exc.code, "message": exc.message}
             return self.store.save(task)
         task["results"] = stored
-        task["result"] = stored[-1]
+        finals = [item for item in stored if item.get("role") == "output"]
+        task["result"] = finals[-1]
         task["status"] = "completed"
         task["error"] = None
-        task["fidelity"] = "cutout_plus_predicted_detail_not_label_identity"
+        task["fidelity"] = (
+            "cutout_plus_predicted_detail_not_identity_restore"
+            if task["capability"] == "image.subject_prep"
+            else "cutout_plus_predicted_detail_not_label_identity"
+        )
         return self.store.save(task)
+
+    def _jpeg_white_derivative(self, task, output_path):
+        jpeg_path = output_path.with_name("jpeg_white.jpg")
+        info = write_jpeg_white(output_path, jpeg_path)
+        blob = jpeg_path.read_bytes()
+        stored_path = self.results / ("%s-jpeg_white.jpg" % task["id"])
+        stored_path.write_bytes(blob)
+        info.update({
+            "role": "jpeg_white",
+            "file": stored_path.name,
+            "media_type": "image/jpeg",
+            "png_master_sha256": hashlib.sha256(output_path.read_bytes()).hexdigest(),
+            "beauty_retouch": False,
+            "generative": False,
+        })
+        self._remember_asset(info, blob, "image/jpeg")
+        return info
+
+    def _remember_asset(self, info, blob, media_type):
+        try:
+            record = self.assets.put(blob, media_type)
+        except ValueError as exc:
+            info["asset_id"] = None
+            info["asset_skip"] = str(exc)
+            return info
+        info["asset_id"] = record["id"]
+        return info
 
     def _invoke_prep(self, task, command, source, destination, *, upscale, size, expect_long_side, source_size, role, already_cut=False, require_object_side=None):
         argv = build_argv(command, source, destination, upscale=upscale, size=size, already_cut=already_cut)
@@ -1163,11 +1730,20 @@ class DirectorApp:
         if code != 0:
             raise DirectorRefusal("prep_failed", "prep_photo exited %s for %s and was not retried. %s" % (code, role, stderr[-300:]))
         if upscale == "onnx" and onnx_fallback(stderr):
+            task["prep"]["upscale_backend"] = "soft_fallback"
+            task["prep"]["upscale_fallback"] = True
+            task["prep"]["neural_upscale_accepted"] = False
+            task["prep"]["neural_weights_observed"] = False
             raise DirectorRefusal(
                 "onnx_fallback",
-                "prep_photo fell back off the requested ONNX Real-ESRGAN path. The output was not accepted.",
+                "prep_photo fell back off the requested ONNX Real-ESRGAN path. The output was not accepted. Soft resize is not reported as neural upscale.",
             )
         info = validate_png(destination, expect_long_side=expect_long_side, source_size=source_size)
+        if upscale == "onnx":
+            task["prep"]["upscale_backend"] = "onnx"
+            task["prep"]["upscale_fallback"] = False
+            task["prep"]["neural_upscale_accepted"] = True
+            task["prep"]["neural_weights_observed"] = False
         if require_object_side is not None:
             info["object"] = assert_object_long_side(destination, require_object_side)
         info["role"] = role
@@ -1590,6 +2166,23 @@ class DirectorApp:
                 "docs": "director/vendor/photo-prep/README.md",
                 "default_model": "u2net",
                 "models": [],
+                "summary": "Product cutout and ONNX Real-ESRGAN x4plus to long side 3840. Not a beauty retouch.",
+            },
+            {
+                "id": "image.subject_prep",
+                "title": "Человек или объект: вырез и длинная сторона 3840",
+                "provider": "local_prep",
+                "kind": "subject_prep",
+                "skills": [],
+                "endpoint": "prep_photo --model u2net --bg transparent --format png --size 3840 --upscale onnx --denoise none",
+                "docs": "director/vendor/photo-prep/README.md",
+                "default_model": "u2net",
+                "models": [],
+                "summary": (
+                    "Same rembg u2net mask for person, object or generic. Not a face restorer and not a generative repaint. "
+                    "Real-ESRGAN x4plus is the requested upscaler after the tight crop. A soft fallback is a failure, not a neural result. "
+                    "PNG alpha is the master. JPEG white is that PNG on white, with no second upscale. No beauty retouch is applied."
+                ),
             },
             *[{
                 "id": item["id"],
@@ -1613,6 +2206,7 @@ class DirectorApp:
                 "docs": studio_route.REPO,
                 "summary": item["summary"],
                 "submits": item["submits"],
+                "needs_h3": item.get("needs_h3", False),
                 "skills": [],
                 "models": [],
             } for item in studio_route.FAMILIES],
@@ -1664,6 +2258,7 @@ class DirectorApp:
             "commercial_runtime": spec.get("commercial_runtime"),
             "temporal_edit": spec.get("temporal_edit"),
             "summary": spec.get("summary"),
+            "needs_h3": spec.get("needs_h3"),
             "ltx": self._ltx_probe() if spec.get("provider") == "ltx_local" else None,
             "studio": studio_route.brief(self._studio_probe()) if spec.get("provider") == "imagination_studio" else None,
         }
@@ -1706,6 +2301,14 @@ class DirectorApp:
             "installed": False,
             "pixel_identity": False,
         }
+
+
+def _studio_error(payload):
+    if isinstance(payload, dict):
+        return str(payload.get("error") or payload)[:500]
+    if isinstance(payload, (bytes, bytearray)):
+        return payload[:300].decode("utf-8", errors="replace")
+    return str(payload)[:500]
 
 
 def _error_text(result, body):
