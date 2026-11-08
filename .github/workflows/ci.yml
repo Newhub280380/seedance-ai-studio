@@ -29,8 +29,8 @@ jobs:
       - name: Validate HTML, links and inline JS
         run: python .github/scripts/validate_site.py
 
-      - name: Install the image library the prep route imports
-        run: pip install 'pillow==12.3.0'
+      - name: Install Director runtime dependencies
+        run: pip install -r requirements.txt
 
       - name: Director contract tests (mocked providers)
         run: python -m unittest discover -s tests -v
