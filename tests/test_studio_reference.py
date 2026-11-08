@@ -305,6 +305,17 @@ class StudioReferenceTest(unittest.TestCase):
         })
         self.assertEqual(blocked["error"]["code"], "studio_renderer_unavailable")
         self.assertEqual(self.httpd.box["uploads"], [])
+        with self.assertRaises(DirectorRefusal) as too_long:
+            self.app.create_task({
+                "capability": "studio.reference_video",
+                "client_request_id": "ref-video-120",
+                "confirm": True,
+                "prep_task_id": prep["id"],
+                "seconds": 120,
+                "prompt": "Use <Picture 1> as the person.",
+            })
+        self.assertEqual(too_long.exception.code, "seconds_rejected")
+        self.assertEqual(self.httpd.box["uploads"], [])
         self.app._studio_probe_cached = _probe(ref2va=True)
         with self.assertRaises(DirectorRefusal) as caught:
             self.app.create_task({
@@ -331,6 +342,19 @@ class StudioReferenceTest(unittest.TestCase):
         self.assertEqual(job["params"]["references"], ["uploads/prepared.jpg"])
         self.assertNotIn("image", job["params"])
         self.assertEqual(job["params"]["seconds"], 5)
+        self.assertIn("<Picture 1>", job["params"]["prompt"])
+        smoke = b"\x00\x00\x00\x18ftypisom\x00\x00\x00\x00"
+        self.httpd.box["job_status"] = "done"
+        self.httpd.box["outputs"] = ["renders/job-ref.mp4"]
+        self.httpd.box["file"] = smoke
+        done = self.app.poll(task["id"])
+        self.assertEqual(done["status"], "completed", done.get("error"))
+        self.assertEqual(done["params"]["seconds"], 5)
+        self.assertNotIn("plan", done)
+        stored, media = self.app.read_result(done["id"])
+        self.assertEqual(media, "video/mp4")
+        self.assertEqual(stored, smoke)
+        self.assertEqual(len(self.httpd.box["jobs"]), 1)
 
     def test_preflight_is_get_only_and_has_no_default_portrait(self):
         from director.preflight import collect

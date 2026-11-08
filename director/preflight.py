@@ -10,7 +10,7 @@ from pathlib import Path
 
 from director.assets import POST_SCHEMA
 from director.prep_route import resolve_command
-from director.service import DirectorApp
+from director.service import DirectorApp, _brain_public
 from director.studio_route import (
     BEAUTY_RETOUCH_PROMPT_EXAMPLE,
     CLASSIC_SECONDS,
@@ -105,6 +105,15 @@ def collect(repo_root: Path, data_dir: Path, transport=None) -> dict:
                 "note": "Character swap is not the primary path.",
             },
         },
+        "plan": {
+            "capability": "director.plan",
+            "preflight_calls_brain": False,
+            "duration_seconds": 120,
+            "aspect_ratio": "9:16",
+            "render_started": False,
+            "brain": _brain_public(app.brain_url, app.brain_model),
+            "note": "Set DIRECTOR_BRAIN_URL and DIRECTOR_BRAIN_MODEL before a plan task. Preflight does not call the brain.",
+        },
         "examples": _examples(),
     }
 
@@ -136,6 +145,23 @@ def _examples() -> dict:
         },
         "subject_prep": prep,
         "image_edit": edit,
+        "plan": {
+            "capability": "director.plan",
+            "client_request_id": "skate-plan-1",
+            "confirm": True,
+            "brief": "<operator brief. Private photos stay on the box; this text names no file bytes.>",
+            "duration_seconds": 120,
+            "aspect_ratio": "9:16",
+            "references": [
+                {"asset_id": "<sha256>", "role": "cast", "label": "father"},
+                {"asset_id": "<sha256>", "role": "cast", "label": "daughter"},
+                {"asset_id": "<sha256>", "role": "place", "label": "cafe"},
+                {"asset_id": "<sha256>", "role": "wardrobe", "label": "daughter_full_body"},
+                {"asset_id": "<sha256>", "role": "place", "label": "rink"},
+                {"asset_id": "<sha256>", "role": "style_motion", "label": "style_reference"},
+            ],
+        },
+        "reference_video_smoke_seconds": 5,
         "reference_video_optional": {
             "capability": "studio.reference_video",
             "client_request_id": "portrait-ref-video-1",
