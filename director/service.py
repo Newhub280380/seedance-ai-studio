@@ -883,50 +883,78 @@ class DirectorApp:
             task["status"] = "failed"
             task["error"] = {"code": exc.code, "message": exc.message}
             return self.store.save(task)
-        sent = plan_route.messages(task["params"])
-        encoded = json.dumps(sent).encode("utf-8")
-        if b"\x89PNG" in encoded or b"\xff\xd8\xff" in encoded:
-            task["status"] = "failed"
-            task["error"] = {"code": "image_bytes_blocked", "message": "Planning tried to send image bytes. It was stopped."}
+        use_schema = plan_route.schema_enabled()
+        rejection = None
+        last_error = "The brain reply was not a valid plan."
+        for attempt in range(1, plan_route.MAX_ATTEMPTS + 1):
+            sent = plan_route.messages(task["params"], rejection)
+            encoded = json.dumps(sent).encode("utf-8")
+            if b"\x89PNG" in encoded or b"\xff\xd8\xff" in encoded:
+                task["status"] = "failed"
+                task["error"] = {"code": "image_bytes_blocked", "message": "Planning tried to send image bytes. It was stopped."}
+                return self.store.save(task)
+            try:
+                status, payload = plan_route.chat(
+                    base, model, sent, self.brain_timeout, self.brain_transport, use_schema=use_schema,
+                )
+            except DirectorRefusal as exc:
+                task["status"] = "failed"
+                task["error"] = {"code": exc.code, "message": exc.message + " No further attempt was made and no plan was invented."}
+                return self.store.save(task)
+            task.setdefault("provider_calls", []).append({
+                "method": "POST",
+                "path": "/chat/completions",
+                "model": model,
+                "http_status": status,
+                "attempt": attempt,
+                "max_attempts": plan_route.MAX_ATTEMPTS,
+                "json_schema": use_schema,
+                "image_bytes_sent": False,
+            })
+            if status >= 400 or not isinstance(payload, dict):
+                task["status"] = "failed"
+                task["error"] = {
+                    "code": "brain_rejected",
+                    "message": "HTTP %s from the local brain. Schema was not removed and the call was not repeated. %s" % (status, _studio_error(payload)),
+                }
+                task["plan_observed"] = {"http_status": status}
+                return self.store.save(task)
+            try:
+                text = payload["choices"][0]["message"]["content"]
+            except (KeyError, IndexError, TypeError):
+                text = ""
+            if not isinstance(text, str):
+                text = ""
+            _remember_reply(task, attempt, text)
+            if not text.strip():
+                last_error = "The brain content was empty. Reasoning text was not used as a plan."
+                rejection = last_error
+                continue
+            try:
+                raw = plan_route.parse_json(text)
+            except DirectorRefusal as exc:
+                last_error = exc.message
+                task["plan_observed"] = {"json_type": "unparsed", "attempt": attempt}
+                rejection = last_error
+                continue
+            task["plan_observed"] = plan_route.diagnose(raw)
+            try:
+                plan = plan_route.validate_plan(raw, task["params"])
+            except DirectorRefusal as exc:
+                last_error = exc.message
+                rejection = last_error
+                continue
+            task["plan"] = plan
+            task["status"] = "planned"
+            task["error"] = None
+            task["model"] = model
+            task["fidelity"] = "text_plan_not_a_film"
             return self.store.save(task)
-        try:
-            status, payload = plan_route.chat(base, model, sent, self.brain_timeout, self.brain_transport)
-        except DirectorRefusal as exc:
-            task["status"] = "failed"
-            task["error"] = {"code": exc.code, "message": exc.message + " The request was not retried and no plan was invented."}
-            return self.store.save(task)
-        task.setdefault("provider_calls", []).append({
-            "method": "POST",
-            "path": "/chat/completions",
-            "model": model,
-            "http_status": status,
-            "image_bytes_sent": False,
-        })
-        if status >= 400 or not isinstance(payload, dict):
-            task["status"] = "failed"
-            task["error"] = {"code": "brain_rejected", "message": _studio_error(payload)}
-            return self.store.save(task)
-        try:
-            text = payload["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, TypeError):
-            text = ""
-        if not isinstance(text, str) or not text.strip():
-            task["status"] = "failed"
-            task["error"] = {"code": "plan_invalid", "message": "The brain content was empty. Reasoning text was not used as a plan."}
-            task["brain_reply_tail"] = ""
-            return self.store.save(task)
-        task["brain_reply_tail"] = text[-1500:]
-        try:
-            plan = plan_route.validate_plan(plan_route.parse_json(text), task["params"])
-        except DirectorRefusal as exc:
-            task["status"] = "failed"
-            task["error"] = {"code": exc.code, "message": exc.message}
-            return self.store.save(task)
-        task["plan"] = plan
-        task["status"] = "planned"
-        task["error"] = None
-        task["model"] = model
-        task["fidelity"] = "text_plan_not_a_film"
+        task["status"] = "failed"
+        task["error"] = {
+            "code": "plan_invalid",
+            "message": last_error + " Attempts: %s. No substitute plan was written." % plan_route.MAX_ATTEMPTS,
+        }
         return self.store.save(task)
 
     def _studio_probe(self):
@@ -2437,6 +2465,18 @@ class DirectorApp:
             "installed": False,
             "pixel_identity": False,
         }
+
+
+def _remember_reply(task, attempt: int, text: str) -> None:
+    task.setdefault("brain_replies", []).append({
+        "attempt": attempt,
+        "chars": len(text),
+        "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        "head": text[:2000],
+        "tail": text[-2000:],
+    })
+    task["brain_reply_head"] = text[:2000]
+    task["brain_reply_tail"] = text[-2000:]
 
 
 def _brain_public(url: str, model: str) -> dict:
