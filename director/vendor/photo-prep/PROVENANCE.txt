@@ -1,0 +1,6 @@
+Existing photo-prep tool supplied for this Director route.
+Original prep_photo.py sha256 before the one flag below:
+8156c34df5d9da80b50d570034dab17acc6fd968dc0b5f632b98fb977a8de292
+prep_photo wrapper sha256: 26efd69a4c30ad123c88964c243a3114ca6cc9005faab01b5b047019cf9fd950
+One flag was added to that script: --already-cut skips a second rembg so the existing ONNX upscaler can run on a tight alpha crop. No new upscaler and no weights are included.
+The box ONNX file stays where it is. Point PREP_ONNX_MODEL at it when this copy of the script is the command.

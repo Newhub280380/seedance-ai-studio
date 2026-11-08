@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -9,7 +10,21 @@ from director.catalog_data import load_catalog, max_input_images
 from director.comfy_gate import inspect_templates
 from director.errors import DirectorRefusal, TransportFailure
 from director.h3_lanes import COMMERCIAL, hosted_max_spec, static_lanes
+from director import ltx_route, studio_route
 from director.pngutil import solid_png
+from director.prep_route import (
+    ALPHA_BBOX_PAD,
+    ALPHA_BBOX_THRESHOLD,
+    LIMITS as PREP_LIMITS,
+    alpha_object_box,
+    assert_object_long_side,
+    build_argv,
+    gallery_chrome_crop,
+    onnx_fallback,
+    resolve_command,
+    run_prep_command,
+    validate_png,
+)
 from director.providers import MinimaxClient, VeniceClient
 from director.skills import load_skills, skills_ready
 from director.store import TaskStore
@@ -48,6 +63,13 @@ class DirectorApp:
         self.minimax = MinimaxClient(minimax_transport, self.minimax_api_key)
         self.venice_transport = venice_transport
         self.minimax_transport = minimax_transport
+        self.prep_photo_command = os.environ.get("DIRECTOR_PREP_PHOTO") or "prep_photo"
+        self.prep_timeout = int(os.environ.get("DIRECTOR_PREP_TIMEOUT") or "900")
+        self.ltx_model_root = os.environ.get("LTX_MODEL_ROOT") or ""
+        self.ltx_python = os.environ.get("LTX_PYTHON") or "python3"
+        self.ltx_timeout = int(os.environ.get("LTX_TIMEOUT") or "3600")
+        self.studio_url = os.environ.get("DIRECTOR_STUDIO_URL") or studio_route.DEFAULT_URL
+        self.studio_transport = None
 
     def capabilities(self):
         items = []
@@ -219,14 +241,33 @@ class DirectorApp:
                 task["provider_cancel_body"] = payload
         return self.store.save(task)
 
-    def read_result(self, task_id, index=0):
+    def read_result(self, task_id, index=None, role=None):
         task = self.store.get(task_id)
         if task is None:
             raise DirectorRefusal("not_found", "Task not found", 404)
         results = task.get("results") or ([] if not task.get("result") else [task["result"]])
-        if index >= len(results):
+        if not results:
             raise DirectorRefusal("no_result", "No stored result for this task", 404)
-        item = results[index]
+        if role:
+            matches = [item for item in results if item.get("role") == role]
+            if not matches:
+                raise DirectorRefusal("no_result", "No stored result with role %s" % role, 404)
+            item = matches[-1]
+        elif index is not None:
+            if index < 0 or index >= len(results):
+                raise DirectorRefusal("no_result", "No stored result at index %s" % index, 404)
+            item = results[index]
+        elif task.get("capability") == "image.product_prep":
+            finals = [item for item in results if item.get("role") == "output"]
+            if not finals:
+                raise DirectorRefusal(
+                    "final_not_ready",
+                    "The 3840 object output is not stored. The native cutout was not returned in its place.",
+                    404,
+                )
+            item = finals[-1]
+        else:
+            item = results[0]
         path = self.results / item["file"]
         data = path.read_bytes()
         if hashlib.sha256(data).hexdigest() != item["sha256"]:
@@ -258,6 +299,12 @@ class DirectorApp:
             return self._run_explainer(task)
         if kind == "h3_max_hosted":
             return self._run_max(task)
+        if kind == "product_prep":
+            return self._run_product_prep(task)
+        if kind == "ltx":
+            return self._run_ltx(task, spec)
+        if kind == "studio":
+            return self._run_studio(task, spec)
         raise DirectorRefusal("not_executable", "This capability has no executor", 409)
 
     def _quote(self, task, spec):
@@ -699,7 +746,437 @@ class DirectorApp:
             return self._prepare_explainer(body)
         if kind == "h3_max_hosted":
             return self._prepare_max(body)
+        if kind == "product_prep":
+            return self._prepare_product_prep(body)
+        if kind == "ltx":
+            return self._prepare_ltx(spec, body)
+        if kind == "studio":
+            return self._prepare_studio(spec, body)
         raise DirectorRefusal("not_executable", "No preparer for this capability")
+
+    def _studio_probe(self):
+        cached = getattr(self, "_studio_probe_cached", None)
+        if cached is None:
+            cached = studio_route.discover(self.studio_url, self.studio_transport)
+            self._studio_probe_cached = cached
+        return cached
+
+    def _prepare_studio(self, spec, body):
+        if body.get("upload_private_face"):
+            raise DirectorRefusal(
+                "private_face_refused",
+                "A private face is not uploaded to Studio or to a cloud brain from this adapter.",
+            )
+        upstream = body.get("studio_params") or {}
+        if not isinstance(upstream, dict):
+            raise DirectorRefusal("studio_params_rejected", "studio_params must be an object.")
+        return {
+            "studio_url": self.studio_url,
+            "endpoint": spec["endpoint"],
+            "submits": spec["submits"],
+            "note": spec["summary"],
+            "same_face": "not_guaranteed",
+            "transparent_background": False,
+            "upstream_params": upstream,
+        }
+
+    def _run_studio(self, task, spec):
+        report = self._studio_probe()
+        info = studio_route.brief(report)
+        task["studio"] = info
+        if not info["reachable"]:
+            task["status"] = "failed"
+            task["error"] = {
+                "code": "studio_unavailable",
+                "message": "Imagination Studio is not answering at %s. %s" % (self.studio_url, info["error"]),
+            }
+            return self.store.save(task)
+        if spec["id"] == "studio.slate_direct":
+            task["status"] = "failed"
+            task["error"] = {
+                "code": "studio_direct_not_submitted",
+                "message": "POST /api/slate/direct was not called. It would start the Studio's own director.",
+            }
+            return self.store.save(task)
+        if spec["id"] == "studio.swap" and not info["swap_ready"]:
+            task["status"] = "failed"
+            task["error"] = {"code": "studio_renderer_unavailable", "message": info["swap_why"] or "Character Swap is not ready."}
+            return self.store.save(task)
+        if spec["id"] == "studio.remove" and not info["remove_ready"]:
+            task["status"] = "failed"
+            task["error"] = {"code": "studio_renderer_unavailable", "message": info["remove_why"] or "Remove a person is not ready."}
+            return self.store.save(task)
+        if spec["id"] == "studio.revise":
+            task["status"] = "failed"
+            task["error"] = {
+                "code": "studio_renderer_unavailable" if not info["ref2va"] else "studio_clip_required",
+                "message": "Revise was not submitted. Ref2VA is %s and no library clip was sent." % ("present" if info["ref2va"] else "absent"),
+            }
+            return self.store.save(task)
+        if spec["id"] not in ("studio.swap", "studio.remove"):
+            task["status"] = "failed"
+            task["error"] = {"code": "studio_renderer_unavailable", "message": "This Studio operation is not submitted from Director."}
+            return self.store.save(task)
+        kind_name = "swap" if spec["id"] == "studio.swap" else "remove"
+        call = self.studio_transport or studio_route.request_json
+        status, payload = call("POST", self.studio_url.rstrip("/") + "/api/jobs", {"kind": kind_name, "params": task["params"].get("upstream_params") or {}}, 15)
+        task.setdefault("provider_calls", []).append({"method": "POST", "path": "/api/jobs", "kind": kind_name, "http_status": status})
+        if status >= 400 or not isinstance(payload, dict) or not payload.get("id"):
+            task["status"] = "failed"
+            message = payload.get("error") if isinstance(payload, dict) else str(payload)
+            task["error"] = {"code": "studio_rejected", "message": str(message)[:500]}
+            return self.store.save(task)
+        task["status"] = "upstream_accepted"
+        task["error"] = None
+        task["upstream_job"] = {"id": payload.get("id"), "status": payload.get("status")}
+        task["fidelity"] = "studio_generative_not_identity_lock"
+        return self.store.save(task)
+
+    def _ltx_probe(self):
+        cached = getattr(self, "_ltx_probe_cached", None)
+        if cached is None:
+            cached = ltx_route.probe(self.ltx_model_root, self.ltx_python)
+            self._ltx_probe_cached = cached
+        return cached
+
+    def _prepare_ltx(self, spec, body):
+        if body.get("commercial_multiuser"):
+            raise DirectorRefusal(
+                "ltx_commercial_disabled",
+                ltx_route.ATTACHMENT_A20 + " Paid multi-user use stays off. This is not a legal clearance of a subscription product.",
+            )
+        if spec["id"] == "ltx.distilled" and (body.get("video_path") or body.get("video_asset_id")):
+            raise DirectorRefusal(
+                "not_temporal_edit",
+                "ltx.distilled is text or still-image to video. A source video is not accepted here and was not treated as object replacement. Use ltx.ic_lora or ltx.retake.",
+            )
+        prompt = body.get("prompt")
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise DirectorRefusal("prompt_required", "prompt is required", 400)
+        frames = body.get("num_frames", 121)
+        try:
+            frames = int(frames)
+        except (TypeError, ValueError) as exc:
+            raise DirectorRefusal("frames_rejected", "num_frames must be an integer of the form 8k+1.") from exc
+        if frames < 1 or (frames - 1) % 8 != 0:
+            raise DirectorRefusal("frames_rejected", "num_frames must be 8k+1, for example 121.")
+        images = []
+        if body.get("image_asset_id"):
+            images.append({"asset_id": body["image_asset_id"], "frame": int(body.get("frame", 0)), "strength": float(body.get("strength", 1.0))})
+        for item in body.get("images") or []:
+            if not isinstance(item, dict) or not item.get("asset_id"):
+                raise DirectorRefusal("image_rejected", "Each keyframe needs an asset_id.")
+            images.append({"asset_id": item["asset_id"], "frame": int(item.get("frame", 0)), "strength": float(item.get("strength", 1.0))})
+        if spec["id"] == "ltx.ic_lora" and not body.get("video_path"):
+            raise DirectorRefusal("video_conditioning_required", "ltx.ic_lora requires the source video. A still was not substituted for it.")
+        if spec["id"] == "ltx.ic_lora" and not body.get("lora_path"):
+            raise DirectorRefusal("lora_required", "ltx.ic_lora requires the path of an IC-LoRA under LTX_MODEL_ROOT.")
+        if spec["id"] == "ltx.retake":
+            if not body.get("video_path"):
+                raise DirectorRefusal("video_required", "ltx.retake requires the source video.")
+            start, end = body.get("start_time"), body.get("end_time")
+            if not isinstance(start, (int, float)) or not isinstance(end, (int, float)) or start >= end:
+                raise DirectorRefusal("retake_window_rejected", "start_time must be less than end_time.")
+        offload = body.get("offload")
+        if offload not in (None, "", "cpu", "disk"):
+            raise DirectorRefusal("offload_rejected", "offload must be cpu or disk, matching the official CLI.")
+        quant = body.get("quantization")
+        if quant not in (None, "", "fp8-cast"):
+            raise DirectorRefusal("quantization_rejected", "The only quantization flag wired here is fp8-cast.")
+        return {
+            "prompt": prompt.strip(),
+            "num_frames": frames,
+            "seed": int(body.get("seed", 42)),
+            "images": images,
+            "video_path": body.get("video_path"),
+            "mask_path": body.get("mask_path"),
+            "lora_path": body.get("lora_path"),
+            "video_strength": body.get("video_strength", 1.0),
+            "lora_strength": body.get("lora_strength", 1.0),
+            "mask_strength": body.get("mask_strength", 1.0),
+            "start_time": body.get("start_time"),
+            "end_time": body.get("end_time"),
+            "offload": offload or None,
+            "quantization": quant or None,
+            "enhance_prompt": False,
+            "model_root": self.ltx_model_root,
+            "license": {
+                "code": "Apache-2.0",
+                "weights": "LTX-2.x Community License",
+                "attachment_a20": ltx_route.ATTACHMENT_A20,
+                "revenue_note": "Section 2.1 requires a paid license at $10,000,000 annual revenue. Attachment A(20) is a separate competing-service limit and is not waived below that figure. This is not a legal verdict.",
+                "commercial_multiuser": "disabled",
+            },
+        }
+
+    def _run_ltx(self, task, spec):
+        if task["params"].get("license", {}).get("commercial_multiuser") == "disabled" and False:
+            pass
+        report = self._ltx_probe()
+        task["ltx"] = {
+            "pin": ltx_route.PIN,
+            "repo": ltx_route.REPO,
+            "module": spec["module"],
+            "temporal_edit": spec["temporal_edit"],
+            "ready": report["ready"],
+            "missing": report["missing"],
+            "measured_hosts": report["measured_hosts"],
+        }
+        if not report["ready"]:
+            task["status"] = "failed"
+            task["error"] = {
+                "code": "ltx_not_ready",
+                "message": "LTX was not started. Missing: " + "; ".join(report["missing"]),
+            }
+            return self.store.save(task)
+        if spec["id"] == "ltx.dfr":
+            lora = Path(self.ltx_model_root) / ltx_route.DFR_LORA
+            if not lora.is_file():
+                task["status"] = "failed"
+                task["error"] = {"code": "ltx_not_ready", "message": "Missing detailing IC-LoRA " + ltx_route.DFR_LORA}
+                return self.store.save(task)
+        try:
+            paths = self._ltx_paths(task, spec)
+        except DirectorRefusal as exc:
+            task["status"] = "failed"
+            task["error"] = {"code": exc.code, "message": exc.message}
+            return self.store.save(task)
+        work = self.data_dir / "ltx" / task["id"]
+        work.mkdir(parents=True, exist_ok=True)
+        output = work / "output.mp4"
+        params = dict(task["params"])
+        params["model_root"] = self.ltx_model_root
+        argv = ltx_route.build_argv(self.ltx_python, spec, paths, output, params)
+        task.setdefault("provider_calls", []).append({"argv": argv, "role": "ltx"})
+        task["status"] = "running"
+        self.store.save(task)
+        try:
+            code, stdout, stderr = ltx_route.run_once(argv, self.ltx_timeout)
+        except DirectorRefusal as exc:
+            task["status"] = "failed"
+            task["error"] = {"code": exc.code, "message": exc.message}
+            return self.store.save(task)
+        task["ltx"]["returncode"] = code
+        task["ltx"]["stderr_tail"] = stderr[-400:]
+        if code != 0 or not ltx_route.is_mp4(output):
+            task["status"] = "failed"
+            task["error"] = {
+                "code": "ltx_output_missing" if code == 0 else "ltx_failed",
+                "message": "No MP4 was stored. exit %s. %s" % (code, stderr[-240:]),
+            }
+            return self.store.save(task)
+        blob = output.read_bytes()
+        stored = self.results / (task["id"] + "-ltx.mp4")
+        stored.write_bytes(blob)
+        task["result"] = {
+            "role": "output",
+            "file": stored.name,
+            "media_type": "video/mp4",
+            "sha256": hashlib.sha256(blob).hexdigest(),
+            "bytes": len(blob),
+        }
+        task["results"] = [task["result"]]
+        task["status"] = "completed"
+        task["error"] = None
+        task["fidelity"] = "ltx_generative_not_label_lock"
+        return self.store.save(task)
+
+    def _ltx_paths(self, task, spec):
+        paths = {}
+        images = []
+        for item in task["params"]["images"]:
+            asset = self._require_asset(item["asset_id"])
+            folder = self.data_dir / "ltx" / task["id"]
+            folder.mkdir(parents=True, exist_ok=True)
+            target = folder / ("frame-%s.png" % item["frame"])
+            target.write_bytes(asset["data"])
+            images.append({"path": target, "frame": item["frame"], "strength": item["strength"]})
+        task["params"]["images"] = images
+        if task["params"].get("video_path"):
+            paths["video"] = self._inside_data(task["params"]["video_path"])
+        if task["params"].get("mask_path"):
+            paths["mask"] = self._inside_data(task["params"]["mask_path"])
+        if task["params"].get("lora_path"):
+            root = Path(self.ltx_model_root).resolve()
+            lora = Path(task["params"]["lora_path"]).resolve()
+            if root not in lora.parents or not lora.is_file():
+                raise DirectorRefusal("lora_missing", "IC-LoRA must be an existing file inside LTX_MODEL_ROOT.")
+            paths["lora"] = lora
+        return paths
+
+    def _inside_data(self, raw):
+        path = Path(raw).resolve()
+        root = self.data_dir.resolve()
+        if path != root and root not in path.parents:
+            raise DirectorRefusal("path_outside_data", "That file is outside the Director data directory.")
+        if not path.is_file():
+            raise DirectorRefusal("input_missing", "Input file is missing: " + path.name)
+        return path
+
+    def _prepare_product_prep(self, body):
+        if body.get("model") not in (None, "", "u2net"):
+            raise DirectorRefusal(
+                "model_not_this_lane",
+                "image.product_prep calls the existing prep_photo tool with rembg model u2net. Another model was not substituted.",
+            )
+        if body.get("upscale") not in (None, "", "onnx"):
+            raise DirectorRefusal("upscale_rejected", "This prep route uses --upscale onnx. A different upscaler was not substituted.")
+        if body.get("size") not in (None, "", 3840, "3840"):
+            raise DirectorRefusal("size_rejected", "The long side for this route is 3840. Another size was not substituted.")
+        return {
+            "original_asset_id": self._one_asset(body.get("original_asset_id")),
+            "model": "u2net",
+            "size": 3840,
+            "upscale": "onnx",
+            "denoise": "none",
+            "bg": "transparent",
+            "format": "png",
+            "prompt_used": False,
+            "limits": PREP_LIMITS,
+        }
+
+    def _run_product_prep(self, task):
+        command = resolve_command(self.prep_photo_command)
+        if not command:
+            task["status"] = "failed"
+            task["error"] = {
+                "code": "prep_command_missing",
+                "message": "DIRECTOR_PREP_PHOTO is not an executable prep_photo. Nothing was sent to a paid API.",
+            }
+            return self.store.save(task)
+        asset = self._require_asset(task["params"]["original_asset_id"])
+        work = self.data_dir / "prep" / task["id"]
+        work.mkdir(parents=True, exist_ok=True)
+        source = work / "original"
+        source.write_bytes(asset["data"])
+        from PIL import Image
+        with Image.open(source) as incoming:
+            incoming.load()
+            cropped = gallery_chrome_crop(incoming)
+            prep_input = incoming.convert("RGB") if cropped is None else cropped
+        crop_path = work / "crop.png"
+        prep_input.save(crop_path, format="PNG")
+        task["prep"] = {
+            "command": command,
+            "gallery_chrome_crop": cropped is not None,
+            "crop_size": list(prep_input.size),
+            "limits": PREP_LIMITS,
+        }
+        task["status"] = "running"
+        self.store.save(task)
+        cutout = work / "cutout.png"
+        output = work / "output.png"
+        stored = []
+        try:
+            stored.append(self._invoke_prep(
+                task,
+                command,
+                crop_path,
+                cutout,
+                upscale="none",
+                size=0,
+                expect_long_side=max(prep_input.size),
+                source_size=prep_input.size,
+                role="cutout",
+            ))
+            task["results"] = list(stored)
+            self.store.save(task)
+            from PIL import Image as _Image
+            with _Image.open(cutout) as cut_image:
+                cut_image.load()
+                box = alpha_object_box(cut_image, ALPHA_BBOX_THRESHOLD, ALPHA_BBOX_PAD)
+                tight = cut_image.crop(box)
+                native_size = list(cut_image.size)
+            tight_path = work / "tight.png"
+            tight.save(tight_path, format="PNG")
+            tight_bytes = tight_path.read_bytes()
+            tight_stored = self.results / ("%s-tight.png" % task["id"])
+            tight_stored.write_bytes(tight_bytes)
+            stored.append({
+                "role": "tight",
+                "media_type": "image/png",
+                "width": tight.size[0],
+                "height": tight.size[1],
+                "file": tight_stored.name,
+                "sha256": hashlib.sha256(tight_bytes).hexdigest(),
+                "bytes": len(tight_bytes),
+            })
+            tight_long = max(tight.size)
+            task["prep"]["alpha_bbox"] = {
+                "threshold": ALPHA_BBOX_THRESHOLD,
+                "pad": ALPHA_BBOX_PAD,
+                "box": list(box),
+                "tight_size": list(tight.size),
+                "native_cutout_size": native_size,
+            }
+            task["results"] = list(stored)
+            self.store.save(task)
+            if tight_long >= 3840:
+                task["prep"]["upscale_skipped"] = "tight object long side is already %s; onnx was not run again" % tight_long
+                output.write_bytes(tight_path.read_bytes())
+                info = validate_png(output, expect_long_side=tight_long, source_size=tight.size)
+                metrics = assert_object_long_side(output, tight_long)
+                info.update({"role": "output", "media_type": "image/png", "object": metrics})
+                info["sha256"] = hashlib.sha256(output.read_bytes()).hexdigest()
+                stored_path = self.results / ("%s-output.png" % task["id"])
+                stored_path.write_bytes(output.read_bytes())
+                info["file"] = stored_path.name
+                stored.append(info)
+            else:
+                stored.append(self._invoke_prep(
+                    task,
+                    command,
+                    tight_path,
+                    output,
+                    upscale="onnx",
+                    size=3840,
+                    expect_long_side=3840,
+                    source_size=tight.size,
+                    role="output",
+                    already_cut=True,
+                    require_object_side=3840,
+                ))
+        except DirectorRefusal as exc:
+            task["results"] = stored
+            if stored:
+                task["result"] = stored[0]
+            task["status"] = "failed"
+            task["error"] = {"code": exc.code, "message": exc.message}
+            return self.store.save(task)
+        task["results"] = stored
+        task["result"] = stored[-1]
+        task["status"] = "completed"
+        task["error"] = None
+        task["fidelity"] = "cutout_plus_predicted_detail_not_label_identity"
+        return self.store.save(task)
+
+    def _invoke_prep(self, task, command, source, destination, *, upscale, size, expect_long_side, source_size, role, already_cut=False, require_object_side=None):
+        argv = build_argv(command, source, destination, upscale=upscale, size=size, already_cut=already_cut)
+        task.setdefault("provider_calls", []).append({"argv": argv, "role": role})
+        self.store.save(task)
+        code, stdout, stderr = run_prep_command(argv, self.prep_timeout)
+        task["prep"].setdefault("runs", []).append({
+            "role": role,
+            "returncode": code,
+            "stderr_tail": stderr[-500:],
+        })
+        if code != 0:
+            raise DirectorRefusal("prep_failed", "prep_photo exited %s for %s and was not retried. %s" % (code, role, stderr[-300:]))
+        if upscale == "onnx" and onnx_fallback(stderr):
+            raise DirectorRefusal(
+                "onnx_fallback",
+                "prep_photo fell back off the requested ONNX Real-ESRGAN path. The output was not accepted.",
+            )
+        info = validate_png(destination, expect_long_side=expect_long_side, source_size=source_size)
+        if require_object_side is not None:
+            info["object"] = assert_object_long_side(destination, require_object_side)
+        info["role"] = role
+        info["media_type"] = "image/png"
+        info["sha256"] = hashlib.sha256(destination.read_bytes()).hexdigest()
+        stored = self.results / ("%s-%s.png" % (task["id"], role))
+        stored.write_bytes(destination.read_bytes())
+        info["file"] = stored.name
+        return info
 
     def _prepare_image(self, body):
         model_id = body.get("model") or "flux-2-pro"
@@ -1103,12 +1580,55 @@ class DirectorApp:
             {"id": "audio.speech", "title": "Речь", "provider": "venice", "kind": "audio_speech", "skills": ["venice-create-audio"], "endpoint": "POST /api/v1/audio/speech", "docs": "https://docs.venice.ai/api-reference/endpoint/audio/speech", "models": ["tts-kokoro"], "default_model": "tts-kokoro"},
             {"id": "explainer.project", "title": "Объясняющее видео: сцены и речь", "provider": "venice", "kind": "explainer", "skills": ["venice-explainer-video", "venice-create-video", "venice-create-audio"], "endpoint": "POST /api/v1/video/queue", "docs": "https://docs.venice.ai/guides/media/video-generation", "models": ["wan-2.5-preview-text-to-video"], "default_model": "wan-2.5-preview-text-to-video"},
             max_spec,
+            {
+                "id": "image.product_prep",
+                "title": "Товар: вырез фона и длинная сторона 3840",
+                "provider": "local_prep",
+                "kind": "product_prep",
+                "skills": [],
+                "endpoint": "prep_photo --model u2net --bg transparent --format png --size 3840 --upscale onnx --denoise none",
+                "docs": "director/vendor/photo-prep/README.md",
+                "default_model": "u2net",
+                "models": [],
+            },
+            *[{
+                "id": item["id"],
+                "title": item["title"],
+                "provider": "ltx_local",
+                "kind": "ltx",
+                "module": item["module"],
+                "temporal_edit": item["temporal_edit"],
+                "summary": item["summary"],
+                "skills": [],
+                "endpoint": "python -m " + item["module"],
+                "docs": ltx_route.REPO,
+                "models": [],
+            } for item in ltx_route.FAMILIES],
+            *[{
+                "id": item["id"],
+                "title": item["title"],
+                "provider": "imagination_studio",
+                "kind": "studio",
+                "endpoint": item["endpoint"],
+                "docs": studio_route.REPO,
+                "summary": item["summary"],
+                "submits": item["submits"],
+                "skills": [],
+                "models": [],
+            } for item in studio_route.FAMILIES],
         ]
 
     def _public_capability(self, spec):
         problems = skills_ready(self.skills, spec.get("skills") or []) if spec.get("provider") == "venice" else []
         key_ok = (spec.get("provider") != "venice" or bool(self.venice_api_key)) and (spec.get("provider") != "minimax" or bool(self.minimax_api_key))
-        if problems:
+        if spec.get("provider") == "local_prep":
+            status = "ready_to_confirm" if resolve_command(self.prep_photo_command) else "prep_command_missing"
+        elif spec.get("provider") == "ltx_local":
+            report = self._ltx_probe()
+            status = "ready_to_confirm" if report["ready"] else "ltx_not_ready"
+        elif spec.get("provider") == "imagination_studio":
+            status = studio_route.readiness(spec["id"], self._studio_probe())
+        elif problems:
             status = "skill_integrity_failed"
         elif not key_ok:
             status = "credential_missing"
@@ -1142,6 +1662,10 @@ class DirectorApp:
             "resolutions_rejected": spec.get("resolutions_rejected"),
             "camera_trajectory": spec.get("camera_trajectory", spec["id"] == "video.venice_camera"),
             "commercial_runtime": spec.get("commercial_runtime"),
+            "temporal_edit": spec.get("temporal_edit"),
+            "summary": spec.get("summary"),
+            "ltx": self._ltx_probe() if spec.get("provider") == "ltx_local" else None,
+            "studio": studio_route.brief(self._studio_probe()) if spec.get("provider") == "imagination_studio" else None,
         }
 
     def _public_lane(self, lane):

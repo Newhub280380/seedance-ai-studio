@@ -1,0 +1,3 @@
+# Runtime image dependency for director.prep_route and the product-prep contract tests.
+# GitHub Actions installs this file on a clean Python 3.11 before unittest.
+pillow==12.3.0
