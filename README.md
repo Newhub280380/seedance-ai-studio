@@ -117,6 +117,31 @@ export LTX_MODEL_ROOT=/path/to/models/ltx-2.5
 python -m director
 ```
 
+## Imagination Studio рядом с Режиссёром
+
+Это отдельное приложение [Imagination Studio by keys+Wasserman](https://github.com/drowzeys/Imagination-Studio-by-keys-Wasserman) тега `v4.3.1`, коммит `3926471d59bfe8a51a295b7bfdef6cda0b09e1de`. Режиссёр его не заменяет. Код Studio — Apache-2.0. Веса и чужие модели имеют свои лицензии, включая территориальные ограничения MiniMax H3. «Полностью открыто» отсюда не следует.
+
+`bash oneshot-setup.sh` на Linux сразу уходит в CUDA-установщик и качает десятки или сотни гигабайт. На машине без `nvidia-smi` он останавливается до загрузки. Его здесь не запускали дальше этой проверки.
+
+Приложение без весов, закреплённая версия, без автообновления:
+
+```bash
+git clone --depth 1 --branch v4.3.1 https://github.com/drowzeys/Imagination-Studio-by-keys-Wasserman.git
+python3 -m venv "$PREFIX/venv"
+"$PREFIX/venv/bin/pip" install 'fastapi==0.142.2' 'uvicorn==0.54.0' 'python-multipart==0.0.32' 'pillow==12.3.0' 'huggingface_hub==1.33.0'
+# в STUDIO_HOME заранее: .studio-agents/settings.json с "default": "local"
+export STUDIO_HOME=...
+export STUDIO_DEFAULT_BRAIN=local
+export PREFIX=...
+export HOST=127.0.0.1 PORT=7870
+export STUDIO_PIDFILE=/tmp/imagination-studio.pid
+bash scripts/app.sh
+```
+
+`STUDIO_PIDFILE` — штатная ветка `scripts/app.sh`: она запускает `app/server.py` и не включает лаунчер, который сам обновляет дерево. Мозг по умолчанию только `local`. Облачные Claude и Codex в опросе этой машины не найдены, запасной отправки кадра им нет.
+
+Character Swap и Remove a person без весов отвечают `ready: false`. Remove a person — это дорисовка видео, не прозрачный вырез. Тот же вырез товара остаётся `image.product_prep`. `POST /api/slate/direct` в коде есть и из Режиссёра не вызывается: он стартует собственного режиссёра Studio.
+
 ## Структура
 
 ```

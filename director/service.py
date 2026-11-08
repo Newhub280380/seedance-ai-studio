@@ -10,7 +10,7 @@ from director.catalog_data import load_catalog, max_input_images
 from director.comfy_gate import inspect_templates
 from director.errors import DirectorRefusal, TransportFailure
 from director.h3_lanes import COMMERCIAL, hosted_max_spec, static_lanes
-from director import ltx_route
+from director import ltx_route, studio_route
 from director.pngutil import solid_png
 from director.prep_route import (
     ALPHA_BBOX_PAD,
@@ -68,6 +68,8 @@ class DirectorApp:
         self.ltx_model_root = os.environ.get("LTX_MODEL_ROOT") or ""
         self.ltx_python = os.environ.get("LTX_PYTHON") or "python3"
         self.ltx_timeout = int(os.environ.get("LTX_TIMEOUT") or "3600")
+        self.studio_url = os.environ.get("DIRECTOR_STUDIO_URL") or studio_route.DEFAULT_URL
+        self.studio_transport = None
 
     def capabilities(self):
         items = []
@@ -301,6 +303,8 @@ class DirectorApp:
             return self._run_product_prep(task)
         if kind == "ltx":
             return self._run_ltx(task, spec)
+        if kind == "studio":
+            return self._run_studio(task, spec)
         raise DirectorRefusal("not_executable", "This capability has no executor", 409)
 
     def _quote(self, task, spec):
@@ -746,7 +750,87 @@ class DirectorApp:
             return self._prepare_product_prep(body)
         if kind == "ltx":
             return self._prepare_ltx(spec, body)
+        if kind == "studio":
+            return self._prepare_studio(spec, body)
         raise DirectorRefusal("not_executable", "No preparer for this capability")
+
+    def _studio_probe(self):
+        cached = getattr(self, "_studio_probe_cached", None)
+        if cached is None:
+            cached = studio_route.discover(self.studio_url, self.studio_transport)
+            self._studio_probe_cached = cached
+        return cached
+
+    def _prepare_studio(self, spec, body):
+        if body.get("upload_private_face"):
+            raise DirectorRefusal(
+                "private_face_refused",
+                "A private face is not uploaded to Studio or to a cloud brain from this adapter.",
+            )
+        upstream = body.get("studio_params") or {}
+        if not isinstance(upstream, dict):
+            raise DirectorRefusal("studio_params_rejected", "studio_params must be an object.")
+        return {
+            "studio_url": self.studio_url,
+            "endpoint": spec["endpoint"],
+            "submits": spec["submits"],
+            "note": spec["summary"],
+            "same_face": "not_guaranteed",
+            "transparent_background": False,
+            "upstream_params": upstream,
+        }
+
+    def _run_studio(self, task, spec):
+        report = self._studio_probe()
+        info = studio_route.brief(report)
+        task["studio"] = info
+        if not info["reachable"]:
+            task["status"] = "failed"
+            task["error"] = {
+                "code": "studio_unavailable",
+                "message": "Imagination Studio is not answering at %s. %s" % (self.studio_url, info["error"]),
+            }
+            return self.store.save(task)
+        if spec["id"] == "studio.slate_direct":
+            task["status"] = "failed"
+            task["error"] = {
+                "code": "studio_direct_not_submitted",
+                "message": "POST /api/slate/direct was not called. It would start the Studio's own director.",
+            }
+            return self.store.save(task)
+        if spec["id"] == "studio.swap" and not info["swap_ready"]:
+            task["status"] = "failed"
+            task["error"] = {"code": "studio_renderer_unavailable", "message": info["swap_why"] or "Character Swap is not ready."}
+            return self.store.save(task)
+        if spec["id"] == "studio.remove" and not info["remove_ready"]:
+            task["status"] = "failed"
+            task["error"] = {"code": "studio_renderer_unavailable", "message": info["remove_why"] or "Remove a person is not ready."}
+            return self.store.save(task)
+        if spec["id"] == "studio.revise":
+            task["status"] = "failed"
+            task["error"] = {
+                "code": "studio_renderer_unavailable" if not info["ref2va"] else "studio_clip_required",
+                "message": "Revise was not submitted. Ref2VA is %s and no library clip was sent." % ("present" if info["ref2va"] else "absent"),
+            }
+            return self.store.save(task)
+        if spec["id"] not in ("studio.swap", "studio.remove"):
+            task["status"] = "failed"
+            task["error"] = {"code": "studio_renderer_unavailable", "message": "This Studio operation is not submitted from Director."}
+            return self.store.save(task)
+        kind_name = "swap" if spec["id"] == "studio.swap" else "remove"
+        call = self.studio_transport or studio_route.request_json
+        status, payload = call("POST", self.studio_url.rstrip("/") + "/api/jobs", {"kind": kind_name, "params": task["params"].get("upstream_params") or {}}, 15)
+        task.setdefault("provider_calls", []).append({"method": "POST", "path": "/api/jobs", "kind": kind_name, "http_status": status})
+        if status >= 400 or not isinstance(payload, dict) or not payload.get("id"):
+            task["status"] = "failed"
+            message = payload.get("error") if isinstance(payload, dict) else str(payload)
+            task["error"] = {"code": "studio_rejected", "message": str(message)[:500]}
+            return self.store.save(task)
+        task["status"] = "upstream_accepted"
+        task["error"] = None
+        task["upstream_job"] = {"id": payload.get("id"), "status": payload.get("status")}
+        task["fidelity"] = "studio_generative_not_identity_lock"
+        return self.store.save(task)
 
     def _ltx_probe(self):
         cached = getattr(self, "_ltx_probe_cached", None)
@@ -1520,6 +1604,18 @@ class DirectorApp:
                 "docs": ltx_route.REPO,
                 "models": [],
             } for item in ltx_route.FAMILIES],
+            *[{
+                "id": item["id"],
+                "title": item["title"],
+                "provider": "imagination_studio",
+                "kind": "studio",
+                "endpoint": item["endpoint"],
+                "docs": studio_route.REPO,
+                "summary": item["summary"],
+                "submits": item["submits"],
+                "skills": [],
+                "models": [],
+            } for item in studio_route.FAMILIES],
         ]
 
     def _public_capability(self, spec):
@@ -1530,6 +1626,8 @@ class DirectorApp:
         elif spec.get("provider") == "ltx_local":
             report = self._ltx_probe()
             status = "ready_to_confirm" if report["ready"] else "ltx_not_ready"
+        elif spec.get("provider") == "imagination_studio":
+            status = studio_route.readiness(spec["id"], self._studio_probe())
         elif problems:
             status = "skill_integrity_failed"
         elif not key_ok:
@@ -1567,6 +1665,7 @@ class DirectorApp:
             "temporal_edit": spec.get("temporal_edit"),
             "summary": spec.get("summary"),
             "ltx": self._ltx_probe() if spec.get("provider") == "ltx_local" else None,
+            "studio": studio_route.brief(self._studio_probe()) if spec.get("provider") == "imagination_studio" else None,
         }
 
     def _public_lane(self, lane):
