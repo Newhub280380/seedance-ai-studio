@@ -129,7 +129,25 @@ curl -sS -X POST http://127.0.0.1:8765/api/director/tasks \
 curl -sS -X POST http://127.0.0.1:8765/api/director/tasks/<edit-id>/poll -H 'Content-Type: application/json' -d '{}'
 ```
 
-Модель правки по умолчанию — Qwen-Image-2.1-Turbo (`image_model` `qwen`), скрипт Studio `scripts/edit.sh`. H3 для неё не нужен. Необязательные модели того же маршрута: `qwen-full` (`--image-edit`), `flux3k-fast` и `flux3k-full` (`--flux3`), `moss-image` (`--moss`). Видео по `<Picture 1>` требует MiniMax H3 Ref2VA (`oneshot-setup.sh --ref2va` или `oneshot-setup-spark.sh --ref2va` на CUDA) и не заменяет правку картинки.
+Модель правки по умолчанию — Qwen-Image-2.1-Turbo (`image_model` `qwen`), скрипт Studio `scripts/edit.sh`. H3 для неё не нужен. Необязательные модели того же маршрута: `qwen-full` (`--image-edit`), `flux3k-fast` и `flux3k-full` (`--flux3`), `moss-image` (`--moss`). Видео по `<Picture 1>` требует MiniMax H3 Ref2VA (`oneshot-setup.sh --ref2va` или `oneshot-setup-spark.sh --ref2va` на CUDA) и не заменяет правку картинки. Дымовая длина этого видео — 5, 8, 10 или 15 секунд. 120 секунд сюда не принимаются и готовым роликом не считаются: `completed` только если Studio вернул файл и Director его проверил.
+
+## План на 120 секунд без рендера
+
+Отдельного режиссёра нет. `POST /api/slate/direct` по-прежнему не вызывается. `director.plan` один раз спрашивает уже запущенный локальный OpenAI-совместимый мозг: `POST $DIRECTOR_BRAIN_URL/chat/completions`. Адрес в коде не зашит. Пока переменные пусты, план не выдумывается.
+
+В запрос уходят текст задания и символические id уже лежащих на этой машине файлов. Байты фотографий не уходят. Ответ должен быть JSON: привязка тех же id, шоты с `image_prompt` и `video_prompt`, длительности — целые, сумма ровно 120, кадр `9:16`, `render_started: false`. Кривой JSON, чужой id, сумма не 120 или стиль, записанный как человек в кадре, дают `plan_invalid`. Запасной текст вместо ответа модели не подставляется. Статус удачного плана — `planned`. Файла фильма нет.
+
+На box, где мозг уже слушает `127.0.0.1:18765` и модель называется как в `GET /v1/models`:
+
+```bash
+export DIRECTOR_BRAIN_URL=http://127.0.0.1:18765/v1
+export DIRECTOR_BRAIN_MODEL=<id из GET http://127.0.0.1:18765/v1/models>
+export DIRECTOR_PORT=8766
+python -m director.preflight
+python -m director
+```
+
+Тело задачи — в выводе preflight, ключ `examples.plan`. `confirm: true` только планирует. Правка и видео — отдельные задачи. Живой вызов мозга в CI не входит. На box его включает `DIRECTOR_PLAN_LIVE=1 python -m unittest tests.test_plan_live -v`.
 
 На box для повторного прогона нужен скрипт из этого дерева, потому что у исходного `prep_photo` нет `--already-cut`, и существующий файл ONNX:
 

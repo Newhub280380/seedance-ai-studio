@@ -1,6 +1,7 @@
 import base64
 import binascii
 import hashlib
+import json
 import os
 import urllib.error
 import urllib.parse
@@ -13,7 +14,7 @@ from director.catalog_data import load_catalog, max_input_images
 from director.comfy_gate import inspect_templates
 from director.errors import DirectorRefusal, TransportFailure
 from director.h3_lanes import COMMERCIAL, hosted_max_spec, static_lanes
-from director import ltx_route, studio_route
+from director import ltx_route, plan_route, studio_route
 from director.pngutil import solid_png
 from director.prep_route import (
     ALPHA_BBOX_PAD,
@@ -77,6 +78,10 @@ class DirectorApp:
         self.ltx_timeout = int(os.environ.get("LTX_TIMEOUT") or "3600")
         self.studio_url = os.environ.get("DIRECTOR_STUDIO_URL") or studio_route.DEFAULT_URL
         self.studio_transport = None
+        self.brain_url = os.environ.get("DIRECTOR_BRAIN_URL") or ""
+        self.brain_model = os.environ.get("DIRECTOR_BRAIN_MODEL") or ""
+        self.brain_timeout = int(os.environ.get("DIRECTOR_BRAIN_TIMEOUT") or "180")
+        self.brain_transport = None
 
     def capabilities(self):
         items = []
@@ -102,6 +107,7 @@ class DirectorApp:
             },
             "assets": POST_SCHEMA,
             "production_identity": studio_route.PRODUCTION_IDENTITY,
+            "brain": _brain_public(self.brain_url, self.brain_model),
             "beauty_retouch": {
                 "applied_by_default": False,
                 "performed_by_prep": False,
@@ -230,7 +236,7 @@ class DirectorApp:
         task = self.store.get(task_id)
         if task is None:
             raise DirectorRefusal("not_found", "Task not found", 404)
-        if task["status"] in ("completed", "queued", "processing", "failed", "refused", "submit_uncertain", "cancelled", "cancel_requested", "upstream_accepted"):
+        if task["status"] in ("completed", "queued", "processing", "failed", "refused", "submit_uncertain", "cancelled", "cancel_requested", "upstream_accepted", "planned"):
             return task
         if task["status"] == "partial" and not continue_remaining:
             return task
@@ -246,7 +252,7 @@ class DirectorApp:
         task = self.store.get(task_id)
         if task is None:
             raise DirectorRefusal("not_found", "Task not found", 404)
-        if task["status"] in ("draft", "quoted", "refused", "failed", "completed", "cancelled", "cancel_requested", "submit_uncertain", "quote_failed", "quote_uncertain"):
+        if task["status"] in ("draft", "quoted", "refused", "failed", "completed", "cancelled", "cancel_requested", "submit_uncertain", "quote_failed", "quote_uncertain", "planned"):
             return task
         if task["capability"] == "explainer.project":
             return self._poll_explainer(task)
@@ -360,6 +366,8 @@ class DirectorApp:
             return self._run_ltx(task, spec)
         if kind == "studio":
             return self._run_studio(task, spec)
+        if kind == "plan":
+            return self._run_plan(task)
         raise DirectorRefusal("not_executable", "This capability has no executor", 409)
 
     def _quote(self, task, spec):
@@ -809,7 +817,117 @@ class DirectorApp:
             return self._prepare_ltx(spec, body)
         if kind == "studio":
             return self._prepare_studio(spec, body)
+        if kind == "plan":
+            return self._prepare_plan(body)
         raise DirectorRefusal("not_executable", "No preparer for this capability")
+
+    def _prepare_plan(self, body):
+        if body.get("render") or body.get("confirm_render"):
+            raise DirectorRefusal("render_rejected", "director.plan does not start an edit or a render.")
+        brief = body.get("brief")
+        if not isinstance(brief, str) or not brief.strip():
+            raise DirectorRefusal("brief_required", "brief is required. A stock story was not substituted.", 400)
+        brief = brief.strip()
+        if len(brief) > 4000:
+            raise DirectorRefusal("brief_rejected", "brief is at most 4000 characters.", 400)
+        if body.get("duration_seconds") != 120:
+            raise DirectorRefusal("duration_rejected", "duration_seconds must be 120. No other length is planned here.")
+        if body.get("aspect_ratio") != "9:16":
+            raise DirectorRefusal("aspect_rejected", "aspect_ratio must be 9:16.")
+        refs = body.get("references")
+        if not isinstance(refs, list) or not 2 <= len(refs) <= 8:
+            raise DirectorRefusal("references_rejected", "references is a list of 2 to 8 items. None were invented.")
+        cleaned = []
+        seen = set()
+        roles = set()
+        for item in refs:
+            if not isinstance(item, dict):
+                raise DirectorRefusal("references_rejected", "Each reference is an object with asset_id, role and label.")
+            asset_id = item.get("asset_id")
+            role = item.get("role")
+            label = item.get("label")
+            if not isinstance(asset_id, str) or not asset_id:
+                raise DirectorRefusal("references_rejected", "Each reference needs an asset_id.")
+            if role not in plan_route.ROLES:
+                raise DirectorRefusal("references_rejected", "role is cast, place, wardrobe or style_motion.")
+            if not isinstance(label, str) or not label.strip() or len(label.strip()) > 40:
+                raise DirectorRefusal("references_rejected", "label is required and at most 40 characters. A name was not inferred.")
+            self._require_asset(asset_id)
+            if asset_id in seen:
+                raise DirectorRefusal("references_rejected", "A reference asset id was repeated.")
+            seen.add(asset_id)
+            roles.add(role)
+            cleaned.append({"asset_id": asset_id, "role": role, "label": label.strip()})
+        if "cast" not in roles:
+            raise DirectorRefusal("references_rejected", "At least one reference has role cast.")
+        return {
+            "brief": brief,
+            "duration_seconds": 120,
+            "aspect_ratio": "9:16",
+            "references": cleaned,
+            "image_bytes_sent": False,
+            "render_started": False,
+        }
+
+    def _run_plan(self, task):
+        task["render_started"] = False
+        task["film"] = None
+        task["plan"] = None
+        task["result"] = None
+        try:
+            base = plan_route.brain_base(self.brain_url)
+            model = (self.brain_model or "").strip()
+            if not model:
+                raise DirectorRefusal("brain_not_configured", "Set DIRECTOR_BRAIN_MODEL. No plan was invented.")
+        except DirectorRefusal as exc:
+            task["status"] = "failed"
+            task["error"] = {"code": exc.code, "message": exc.message}
+            return self.store.save(task)
+        sent = plan_route.messages(task["params"])
+        encoded = json.dumps(sent).encode("utf-8")
+        if b"\x89PNG" in encoded or b"\xff\xd8\xff" in encoded:
+            task["status"] = "failed"
+            task["error"] = {"code": "image_bytes_blocked", "message": "Planning tried to send image bytes. It was stopped."}
+            return self.store.save(task)
+        try:
+            status, payload = plan_route.chat(base, model, sent, self.brain_timeout, self.brain_transport)
+        except DirectorRefusal as exc:
+            task["status"] = "failed"
+            task["error"] = {"code": exc.code, "message": exc.message + " The request was not retried and no plan was invented."}
+            return self.store.save(task)
+        task.setdefault("provider_calls", []).append({
+            "method": "POST",
+            "path": "/chat/completions",
+            "model": model,
+            "http_status": status,
+            "image_bytes_sent": False,
+        })
+        if status >= 400 or not isinstance(payload, dict):
+            task["status"] = "failed"
+            task["error"] = {"code": "brain_rejected", "message": _studio_error(payload)}
+            return self.store.save(task)
+        try:
+            text = payload["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError):
+            text = ""
+        if not isinstance(text, str) or not text.strip():
+            task["status"] = "failed"
+            task["error"] = {"code": "plan_invalid", "message": "The brain content was empty. Reasoning text was not used as a plan."}
+            task["brain_reply_tail"] = ""
+            return self.store.save(task)
+        task["brain_reply_tail"] = text[-1500:]
+        try:
+            plan = plan_route.validate_plan(plan_route.parse_json(text), task["params"])
+        except DirectorRefusal as exc:
+            task["status"] = "failed"
+            task["error"] = {"code": exc.code, "message": exc.message}
+            return self.store.save(task)
+        task["plan"] = plan
+        task["status"] = "planned"
+        task["error"] = None
+        task["model"] = model
+        task["fidelity"] = "text_plan_not_a_film"
+        return self.store.save(task)
 
     def _studio_probe(self):
         cached = getattr(self, "_studio_probe_cached", None)
@@ -2184,6 +2302,22 @@ class DirectorApp:
                     "PNG alpha is the master. JPEG white is that PNG on white, with no second upscale. No beauty retouch is applied."
                 ),
             },
+            {
+                "id": "director.plan",
+                "title": "План ролика без рендера",
+                "provider": "local_brain",
+                "kind": "plan",
+                "skills": [],
+                "endpoint": "POST {DIRECTOR_BRAIN_URL}/chat/completions",
+                "docs": "director/plan_route.py",
+                "models": [],
+                "needs_h3": False,
+                "summary": (
+                    "One text call to the configured loopback OpenAI-compatible brain. "
+                    "The reply is a 120-second 9:16 shot plan bound to the given asset ids. "
+                    "Image bytes are not sent. An invalid reply is rejected. No edit or render is started."
+                ),
+            },
             *[{
                 "id": item["id"],
                 "title": item["title"],
@@ -2215,7 +2349,9 @@ class DirectorApp:
     def _public_capability(self, spec):
         problems = skills_ready(self.skills, spec.get("skills") or []) if spec.get("provider") == "venice" else []
         key_ok = (spec.get("provider") != "venice" or bool(self.venice_api_key)) and (spec.get("provider") != "minimax" or bool(self.minimax_api_key))
-        if spec.get("provider") == "local_prep":
+        if spec.get("provider") == "local_brain":
+            status = "ready_to_confirm" if _brain_public(self.brain_url, self.brain_model)["configured"] else "brain_not_configured"
+        elif spec.get("provider") == "local_prep":
             status = "ready_to_confirm" if resolve_command(self.prep_photo_command) else "prep_command_missing"
         elif spec.get("provider") == "ltx_local":
             report = self._ltx_probe()
@@ -2301,6 +2437,18 @@ class DirectorApp:
             "installed": False,
             "pixel_identity": False,
         }
+
+
+def _brain_public(url: str, model: str) -> dict:
+    if not (url or "").strip() and not (model or "").strip():
+        return {"configured": False, "model": None, "endpoint": None, "hardcoded_url": False}
+    try:
+        base = plan_route.brain_base(url)
+    except DirectorRefusal as exc:
+        return {"configured": False, "model": (model or "").strip() or None, "endpoint": None, "error": exc.code, "hardcoded_url": False}
+    if not (model or "").strip():
+        return {"configured": False, "model": None, "endpoint": base, "error": "brain_not_configured", "hardcoded_url": False}
+    return {"configured": True, "model": model.strip(), "endpoint": base, "hardcoded_url": False}
 
 
 def _studio_error(payload):
