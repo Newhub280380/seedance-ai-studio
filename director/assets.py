@@ -2,6 +2,31 @@ import hashlib
 import os
 from pathlib import Path
 
+# Decoded file bytes. The HTTP body is JSON, not the image itself.
+MAX_BYTES = 2_000_000
+
+POST_SCHEMA = {
+    "method": "POST",
+    "path": "/api/director/assets",
+    "content_type": "application/json; charset=utf-8",
+    "raw_body": {
+        "image/jpeg": "bad_json",
+        "image/png": "bad_json",
+        "note": "A raw image body is not this route. The bytes go in content_base64.",
+    },
+    "json": {
+        "content_base64": "required string. Standard base64 of the file bytes. Not a data URL. No whitespace.",
+        "media_type": "image/png, image/jpeg or image/webp. image/jpg is stored as image/jpeg. Omitted means image/png. The decoded magic bytes must match.",
+    },
+    "limits": {
+        "min_decoded_bytes": 1,
+        "max_decoded_bytes": MAX_BYTES,
+        "rate_limit": None,
+        "idempotency": "The id is the sha256 of the exact decoded bytes. The same bytes return the same id and do not create a second file.",
+    },
+    "response_asset": ["id", "sha256", "bytes", "media_type"],
+}
+
 
 class AssetStore:
     def __init__(self, root):
@@ -13,8 +38,8 @@ class AssetStore:
     def put(self, data, media_type):
         if not isinstance(data, (bytes, bytearray)) or not data:
             raise ValueError("empty asset")
-        if len(data) > 2_000_000:
-            raise ValueError("asset exceeds 2MB in this slice")
+        if len(data) > MAX_BYTES:
+            raise ValueError("asset exceeds %s bytes" % MAX_BYTES)
         digest = hashlib.sha256(data).hexdigest()
         target = self.root / digest
         if not target.exists():

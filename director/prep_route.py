@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import subprocess
@@ -33,8 +34,12 @@ LIMITS = {
     ),
     "upscale": (
         "Real-ESRGAN x4plus predicts detail. It runs only after a tight alpha crop, then the existing tool sets the long side to 3840. "
-        "Printed letters can change. The native full-canvas cutout is kept unchanged for comparison. Label identity is not claimed."
+        "Printed letters can change. The native full-canvas cutout is kept unchanged for comparison. Label identity is not claimed. "
+        "This upscale is not a beauty retouch: it does not soften wrinkles, whiten teeth, change expression, or restore a face."
     ),
+    "beauty_retouch": False,
+    "realesrgan_is_beauty_retouch": False,
+    "generative_default": False,
     "denoise": "none",
     "alpha_matting": False,
     "decontamination": False,
@@ -43,6 +48,20 @@ LIMITS = {
     "alpha_bbox_threshold": 16,
     "alpha_bbox_pad": 1,
     "object_long_side_target": 3840,
+}
+
+SUBJECTS = ("person", "object", "generic")
+SUBJECT_LIMITS = {
+    **LIMITS,
+    "subjects": list(SUBJECTS),
+    "mask_model": "u2net",
+    "u2net_human_seg": False,
+    "face_restoration": False,
+    "anatomy_invented": False,
+    "generative_repaint": False,
+    "identity_inferred": False,
+    "bundled_portrait": None,
+    "jpeg_white": "RGB composite of the alpha PNG on white, quality 92. No second upscale and no second rembg.",
 }
 
 ALPHA_BBOX_THRESHOLD = 16
@@ -205,6 +224,61 @@ def validate_png(path: Path, *, expect_long_side: int | None, source_size: tuple
         "alpha_max": high,
         "bytes": len(blob),
     }
+
+
+def write_jpeg_white(source: Path, destination: Path, quality: int = 92) -> dict:
+    """Composite an RGBA PNG onto white and save JPEG. This does not upscale and does not call rembg."""
+
+    with Image.open(source) as image:
+        image.load()
+        if image.mode != "RGBA":
+            raise DirectorRefusal("alpha_missing", "%s has no alpha channel to composite." % source.name)
+        rgba = image.copy()
+    white = Image.new("RGB", rgba.size, (255, 255, 255))
+    white.paste(rgba, mask=rgba.getchannel("A"))
+    _check_jpeg_pixels(rgba, white)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    white.save(destination, format="JPEG", quality=quality, optimize=True)
+    blob = destination.read_bytes()
+    if not blob.startswith(b"\xff\xd8\xff"):
+        raise DirectorRefusal("jpeg_missing", "The white JPEG derivative is not a JPEG.")
+    with Image.open(destination) as saved:
+        saved.load()
+        if saved.mode != "RGB" or saved.size != rgba.size:
+            raise DirectorRefusal("jpeg_missing", "The white JPEG derivative does not match the PNG master.")
+    return {
+        "width": rgba.size[0],
+        "height": rgba.size[1],
+        "bytes": len(blob),
+        "sha256": hashlib.sha256(blob).hexdigest(),
+        "quality": quality,
+        "background": "white",
+        "alpha": False,
+        "second_upscale": False,
+    }
+
+
+def _check_jpeg_pixels(rgba: Image.Image, white: Image.Image) -> None:
+    source = rgba.load()
+    flat = white.load()
+    width, height = rgba.size
+    seen_clear = False
+    seen_solid = False
+    for y in range(height):
+        for x in range(width):
+            red, green, blue, alpha = source[x, y]
+            if alpha == 0:
+                seen_clear = True
+                if flat[x, y] != (255, 255, 255):
+                    raise DirectorRefusal("jpeg_white_mismatch", "A transparent pixel was not white in the JPEG.")
+            elif alpha == 255:
+                seen_solid = True
+                if flat[x, y] != (red, green, blue):
+                    raise DirectorRefusal("jpeg_white_mismatch", "An opaque pixel changed in the JPEG.")
+            if seen_clear and seen_solid:
+                return
+        if seen_clear and seen_solid:
+            return
 
 
 def _aspect_matches(source: tuple[int, int], output: tuple[int, int]) -> bool:

@@ -73,6 +73,7 @@ class PrepRouteTest(unittest.TestCase):
 
     def tearDown(self):
         import shutil
+        os.environ.pop("MOCK_PREP_MODE", None)
         shutil.rmtree(self.data, ignore_errors=True)
 
     def _asset(self):
@@ -118,6 +119,11 @@ class PrepRouteTest(unittest.TestCase):
         self.assertNotIn("--alpha-matting", joined)
         self.assertEqual(self.app.venice_transport.calls, [])
         self.assertEqual(task["fidelity"], "cutout_plus_predicted_detail_not_label_identity")
+        self.assertEqual(task["prep"]["upscale_backend"], "onnx")
+        self.assertFalse(task["prep"]["upscale_fallback"])
+        self.assertFalse(task["prep"]["neural_weights_observed"])
+        self.assertFalse(task["prep"]["realesrgan_is_beauty_retouch"])
+        self.assertFalse(task["prep"]["beauty_retouch"])
         output = self.app.read_result(task["id"])[0]
         self.assertTrue(output.startswith(b"\x89PNG"))
 
@@ -170,6 +176,8 @@ class PrepRouteTest(unittest.TestCase):
         })
         self.assertEqual(task["status"], "failed")
         self.assertEqual(task["error"]["code"], "onnx_fallback")
+        self.assertEqual(task["prep"]["upscale_backend"], "soft_fallback")
+        self.assertFalse(task["prep"]["neural_upscale_accepted"])
         self.assertEqual(task["results"][0]["role"], "cutout")
         self.assertTrue(onnx_fallback("ВНИМАНИЕ: ONNX модель не найдена (x), fallback на soft."))
 
