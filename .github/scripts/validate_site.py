@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static validation for the Seedance AI Studio single-page site.
+"""Static validation for the Режиссёр 1.0 single-page site.
 
 Dependency-free checks (Python 3.9+, no pip installs) that fail only on real
 problems:

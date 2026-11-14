@@ -1,6 +1,6 @@
-# Seedance AI Studio
+# Режиссёр 1.0
 
-Визуальная Pinterest-style библиотека промтов для Seedance (AI-видео): галерея карточек
+Визуальная Pinterest-style библиотека промтов для Режиссёра 1.0 (AI-видео): галерея карточек
 с fashion, брендами, 3D-товарами, liquid/mosaic-эффектами, cinematic, anime, UGC, Reels
 и мемами из фильмов.
 
@@ -12,7 +12,7 @@
 
 ## Accio: «Народный режиссёр»
 
-В этом репозитории рядом две вещи: живое приложение Seedance (`index.html`) и пакет
+В этом репозитории рядом две вещи: живое приложение «Режиссёр 1.0» (`index.html`) и пакет
 документов для Accio — [`docs/accio-director/`](docs/accio-director/).
 
 Пакет — готовое задание для Accio Work: спроектировать приложение, где человек
@@ -23,7 +23,7 @@
 (роутер интентов и 212 YAML-рецептов). Вложения — в `attach/` (архив конвейера
 `studio` и мета рецептов). Сайт `index.html` от пакета не зависит.
 
-This repo is the Seedance studio and the Accio pack docs. The pack in
+This repo is Режиссёр 1.0 and the Accio pack docs. The pack in
 [`docs/accio-director/`](docs/accio-director/) is one assignment for Accio Work:
 design an app where a person uploads a few family photos, presses one button, and
 gets a short film. It includes the full prompt, the honest scope note, context
@@ -307,5 +307,5 @@ Workflow собирает `_site/` (`index.html` + `README.md`) и публик�
 ## Лицензия / данные
 
 Промты — авторский текст проекта, можно свободно использовать и переносить.
-Внешние сервисы (Seedance и т.п.) для генерации видео не требуются: сайт только
+Внешние сервисы для генерации видео не требуются: сайт только
 хранит и отдаёт текст промтов.

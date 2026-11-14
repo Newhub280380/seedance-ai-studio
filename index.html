@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="description" content="Seedance AI Studio — большая визуальная библиотека промтов: бренды, 3D товары, жидкие эффекты, кино, аниме, UGC и мемы/рилсы из фильмов." />
-  <title>Seedance AI Studio — Premium Library</title>
+  <meta name="description" content="Режиссёр 1.0 — большая визуальная библиотека промтов: бренды, 3D товары, жидкие эффекты, кино, аниме, UGC и мемы/рилсы из фильмов." />
+  <title>Режиссёр 1.0 — Premium Library</title>
   <style>
     :root{--bg:#07080c;--panel:#111319;--line:#262a37;--text:#f6f7fb;--muted:#9298a8;--accent:#b7ff4a;--accent2:#55e6ff;--pink:#ff6fbd}
     *{box-sizing:border-box}html{scroll-behavior:smooth}
@@ -114,11 +114,11 @@
 <body>
   <div class="app">
     <aside class="sidebar">
-      <div class="brand"><span class="brand-mark">✦</span> Seedance Studio</div>
+      <div class="brand"><span class="brand-mark">✦</span> Режиссёр 1.0</div>
       <div class="eyebrow">Library</div>
       <nav class="nav" id="nav"></nav>
       <div class="nav"><button type="button" id="directorBtn">▣ Режиссёр</button></div>
-      <div class="sidebar-note"><strong>Твоя идея → визуал</strong>Выбери карточку, скопируй промт, вставь в Seedance вместе со своим фото — и получи готовый результат.</div>
+      <div class="sidebar-note"><strong>Твоя идея → визуал</strong>Выбери карточку, скопируй промт, вставь в «Режиссёр 1.0» вместе со своим фото — и получи готовый результат.</div>
     </aside>
     <main class="main">
       <header class="topbar">
@@ -276,7 +276,7 @@
       render();
     };
     ['uploadTop','uploadHero'].forEach(id=>$('#'+id).onclick=()=>$('#file').click());
-    $('#file').onchange=e=>{if(e.target.files[0])alert('Фото выбрано ✅ Теперь скопируй промт и вставь его в Seedance вместе с фото.');};
+    $('#file').onchange=e=>{if(e.target.files[0])alert('Фото выбрано ✅ Теперь скопируй промт и вставь его в «Режиссёр 1.0» вместе с фото.');};
     render();
     if (window.DirectorClient) DirectorClient.mount(document);
   </script>
