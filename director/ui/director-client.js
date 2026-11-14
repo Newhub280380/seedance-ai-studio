@@ -84,7 +84,12 @@
         + "<button type='button' class='ghost' id='directorCancel'>Отменить локально</button>"
         + "</div>"
         + "<pre id='directorLog' class='director-log'>Задачи появятся здесь. Идентификатор провайдера сохраняется в задаче.</pre>";
-      document.getElementById("directorCapability").addEventListener("change", showSelected);
+      document.getElementById("directorCapability").addEventListener("change", function () {
+        var model = document.getElementById("directorModel");
+        if (model) model.value = "";
+        state.clientRequestId = null;
+        showSelected();
+      });
       document.getElementById("directorFixture").addEventListener("click", addFixture);
       document.getElementById("directorSubmit").addEventListener("click", submit);
       document.getElementById("directorPoll").addEventListener("click", function () { act("poll"); });
@@ -114,12 +119,36 @@
       if (constraints && constraints.aspect_ratios && constraints.aspect_ratios.length) limits += " Допустимые соотношения: " + constraints.aspect_ratios.join(", ") + ".";
       if (constraints && constraints.durations) limits += " Длительности: " + constraints.durations.join(", ") + ".";
       if (item.resolutions) limits += " Разрешения: " + item.resolutions.join(", ") + ".";
+      var ratios = (constraints && (constraints.aspectRatios || constraints.aspect_ratios)) || [];
+      fillDefault("directorAspect", ratios, ratios.indexOf("9:16") >= 0 ? "9:16" : ratios[0]);
+      var durations = (constraints && constraints.durations) || [];
+      fillDefault("directorDuration", durations, durations[0]);
+      fillDefault("directorResolution", item.resolutions || [], (item.resolutions || [])[0]);
       node.textContent = "Готовность: " + ((item.readiness && item.readiness.status) || "unknown")
         + (item.reason ? ". " + item.reason : "")
         + (item.lane ? ". Контур: " + item.lane : "")
         + "."
         + limits
         + " Пиксельное сохранение лица не обещается.";
+    }
+
+    // Подставляет допустимое значение по умолчанию и список подсказок, чтобы пустое поле
+    // не превращалось в отказ сервера (раньше «Сохранить задачу» с пустым соотношением давало ошибку).
+    function fillDefault(id, values, fallback) {
+      var input = document.getElementById(id);
+      if (!input) return;
+      var listId = id + "List";
+      var list = document.getElementById(listId);
+      if (!list) {
+        list = document.createElement("datalist");
+        list.id = listId;
+        input.parentNode.appendChild(list);
+        input.setAttribute("list", listId);
+      }
+      list.innerHTML = values.map(function (value) { return "<option value='" + escapeAttr(value) + "'></option>"; }).join("");
+      if (values.length && values.map(String).indexOf(input.value.trim()) < 0) input.value = fallback == null ? "" : String(fallback);
+      if (!values.length && input.dataset.autofilled === "1") input.value = "";
+      input.dataset.autofilled = values.length ? "1" : "";
     }
 
     function addFixture() {
@@ -159,7 +188,13 @@
 
     function remember(payload) {
       if (payload.task) state.task = payload.task;
-      log(JSON.stringify(payload, null, 2));
+      var head = "";
+      if (payload && payload.ok === false && payload.error) {
+        head = "Не принято: " + (payload.error.message || payload.error.code) + "\n\n";
+      } else if (payload && payload.task) {
+        head = "Задача " + payload.task.id + ": " + payload.task.status + (payload.task.error ? " (" + (payload.task.error.message || payload.task.error.code) + ")" : "") + "\n\n";
+      }
+      log(head + JSON.stringify(payload, null, 2));
     }
 
     function postJson(url, body) {
