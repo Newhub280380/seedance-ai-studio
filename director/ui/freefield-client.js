@@ -1,5 +1,5 @@
 /* Freefield apps for Режиссёр 1.0: catalog, free request check, paid run on fal only after confirmation.
-   Talks to /api/director/freefield/* (director/freefield_route.py). «скоро» apps have no buttons. */
+   Talks to /api/director/freefield/* (director/freefield_route.py). All 28 apps open an in-page form; «скоро» shows a card with a disabled run button. */
 (function () {
   "use strict";
   var CSS = ".ff-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px}" +
@@ -90,7 +90,7 @@
 
     function renderCatalog() {
       var html = "<h2>Приложения (как во Freefield)</h2><p class='director-note'>«работает» — запуск в облаке fal, цена на карточке; " +
-        "«скоро» — ещё не подключено, кнопок нет.</p>";
+        "«скоро» — откроется карточка с отключённым запуском.</p>";
       if (!catalog.fal_ready) html += "<p class='ff-err'>Ключа fal нет на сервере — запуск недоступен, проверка запроса работает.</p>";
       catalog.sections.forEach(function (section) {
         var apps = catalog.apps.filter(function (a) { return a.section === section.id; });
@@ -101,9 +101,7 @@
           var inner = "<span class='ff-badge'>" + (a.status === "ready" ? "работает" : "скоро") + "</span><b>" + esc(a.name) + "</b>" +
             esc(a.summary) + "<small>" + esc(a.models) + "</small>" +
             (a.status === "ready" ? "<small>" + esc(a.price) + "</small>" : "<small class='ff-need'>Нужно: " + esc(a.needs) + "</small>");
-          html += a.status === "ready"
-            ? "<button type='button' class='ff-card' data-ff-app='" + esc(a.id) + "'>" + inner + "</button>"
-            : "<div class='ff-card soon'>" + inner + "</div>";
+          html += "<button type='button' class='ff-card" + (a.status === "ready" ? "" : " soon") + "' data-ff-app='" + esc(a.id) + "'>" + inner + "</button>";
         });
         html += "</div>";
       });
@@ -138,18 +136,26 @@
 
     function renderForm(appId) {
       var app = catalog.apps.filter(function (a) { return a.id === appId; })[0];
+      var soon = app.status !== "ready";
       var files = {};
+      var title = "<h2>" + esc(app.name) + (soon ? " <span class='ff-badge'>скоро</span>" : "") + "</h2>";
+      var note = soon
+        ? esc(app.summary) + "<br>Модель: " + esc(app.models) + "<br>Нужно: " + esc(app.needs)
+        : esc(app.summary) + "<br>Модель: " + esc(app.models) + "<br>Цена: " + esc(app.price);
+      var actions = soon
+        ? "<div class='ff-row'><button type='button' class='primary' id='ffRun' disabled title='Ещё не подключено'>Запустить — скоро</button></div>"
+        : "<div class='ff-row'><button type='button' class='ghost' id='ffCheck'>Проверить запрос (бесплатно)</button>" +
+          "<button type='button' class='primary' id='ffRun'" + (catalog.fal_ready ? "" : " disabled title='Нет ключа fal'") + ">Запустить (платно, fal)</button></div>";
       panel.innerHTML = "<p><button type='button' class='ghost' id='ffBack'>← Все приложения</button></p>" +
-        "<h2>" + esc(app.name) + "</h2><p class='director-note'>" + esc(app.summary) + "<br>Модель: " + esc(app.models) +
-        " · fal: " + esc(app.endpoint) + "<br>Цена: " + esc(app.price) + "</p>" +
-        "<div class='ff-form'>" + app.inputs.map(field).join("") +
-        "<div class='ff-row'><button type='button' class='ghost' id='ffCheck'>Проверить запрос (бесплатно)</button>" +
-        "<button type='button' class='primary' id='ffRun'" + (catalog.fal_ready ? "" : " disabled title='Нет ключа fal'") + ">Запустить (платно, fal)</button></div>" +
+        title + "<p class='director-note'>" + note + "</p>" +
+        "<div class='ff-form'>" + (soon ? "" : app.inputs.map(field).join("")) +
+        actions +
         "<div id='ffMsg'></div><div id='ffOut' class='ff-out'></div></div>";
       document.getElementById("ffBack").addEventListener("click", function () {
         if (timer) { clearInterval(timer); timer = null; }
         renderCatalog();
       });
+      if (soon) return;
       Array.prototype.forEach.call(panel.querySelectorAll("[data-ff-file]"), function (node) {
         node.addEventListener("change", function () {
           var key = node.getAttribute("data-ff-file");
