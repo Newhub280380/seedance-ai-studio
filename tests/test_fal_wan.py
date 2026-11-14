@@ -62,6 +62,17 @@ class FalWanTest(unittest.TestCase):
         self.assertEqual(body["aspect_ratio"], "9:16")
         self.assertNotIn("image_url", body)
 
+    def test_long_script_up_to_8000_chars_is_accepted(self):
+        self.submit_ok()
+        script = ("0–8 с. Девочка на кухне. «Ты решила рассказать обо всём маме.» " * 40)[:7900]
+        self.assertGreater(len(script), 2000)
+        task = self.app.create_task({"capability": "video.fal_wan", "client_request_id": "long1", "prompt": script, "confirm": True})
+        self.assertEqual(task["status"], "queued")
+        self.assertEqual(json_of(self.fal.calls[0])["prompt"], script.strip())
+        with self.assertRaises(DirectorRefusal) as ctx:
+            self.app.create_task({"capability": "video.fal_wan", "client_request_id": "long2", "prompt": "к" * 8001, "confirm": True})
+        self.assertEqual(ctx.exception.code, "prompt_too_long")
+
     def test_photo_goes_to_image_to_video(self):
         asset = self.app.put_asset_json({"content_base64": PNG_B64, "media_type": "image/png"})
         self.submit_ok()

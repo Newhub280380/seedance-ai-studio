@@ -19,7 +19,7 @@ FPS = 16
 NUM_FRAMES = SECONDS * FPS + 1
 ASPECTS = ["9:16", "16:9", "1:1"]
 RESOLUTIONS = ["720p", "580p", "480p"]
-PROMPT_LIMIT = 2000
+PROMPT_LIMIT = 8000  # long scripts (scene lists with voiceover) fit; fal accepts long prompts
 
 IMAGE_TEXT_ENDPOINT = "fal-ai/flux/dev"
 IMAGE_EDIT_ENDPOINT = "fal-ai/flux-kontext/dev"
