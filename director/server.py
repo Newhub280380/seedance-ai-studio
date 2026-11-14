@@ -92,6 +92,16 @@ class DirectorHandler:
             media = "text/javascript; charset=utf-8"
         elif path.suffix == ".json":
             media = "application/json"
+        elif path.suffix == ".mp4":
+            media = "video/mp4"
+        elif path.suffix in (".jpg", ".jpeg"):
+            media = "image/jpeg"
+        elif path.suffix == ".png":
+            media = "image/png"
+        elif path.suffix == ".webp":
+            media = "image/webp"
+        elif path.suffix == ".css":
+            media = "text/css; charset=utf-8"
         return 200, path.read_bytes(), media
 
 
