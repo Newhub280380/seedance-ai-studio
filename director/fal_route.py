@@ -21,6 +21,22 @@ ASPECTS = ["9:16", "16:9", "1:1"]
 RESOLUTIONS = ["720p", "580p", "480p"]
 PROMPT_LIMIT = 2000
 
+IMAGE_TEXT_ENDPOINT = "fal-ai/flux/dev"
+IMAGE_EDIT_ENDPOINT = "fal-ai/flux-kontext/dev"
+IMAGE_SIZES = {"9:16": "portrait_16_9", "16:9": "landscape_16_9", "1:1": "square_hd", "3:4": "portrait_4_3", "4:3": "landscape_4_3"}
+
+IMAGE_SPEC = {
+    "id": "image.fal_flux",
+    "title": "Картинка: FLUX (fal)",
+    "provider": "fal",
+    "kind": "image_fal",
+    "endpoint": "POST " + QUEUE_BASE + "/" + IMAGE_TEXT_ENDPOINT,
+    "docs": "https://fal.ai/models/fal-ai/flux/dev/api",
+    "models": [],
+    "default_model": IMAGE_TEXT_ENDPOINT,
+    "aspect_ratios": list(IMAGE_SIZES),
+}
+
 SPEC = {
     "id": "video.fal_wan",
     "title": "Видео 5 с: Wan 2.2 (fal)",
@@ -102,7 +118,28 @@ def prepare(body, prompt, image_asset_id):
     }
 
 
+def prepare_image(body, prompt, image_asset_id):
+    """Text -> FLUX dev; with a photo -> FLUX Kontext edit (the photo is changed by the prompt)."""
+    aspect = body.get("aspect_ratio") or "1:1"
+    if aspect not in IMAGE_SIZES:
+        raise DirectorRefusal("aspect_ratio_invalid", "Соотношение %s не поддерживается. Можно: %s." % (aspect, ", ".join(IMAGE_SIZES)))
+    return {
+        "kind": "image",
+        "model": IMAGE_EDIT_ENDPOINT if image_asset_id else IMAGE_TEXT_ENDPOINT,
+        "prompt": prompt,
+        "aspect_ratio": aspect,
+        "image_asset_id": image_asset_id,
+    }
+
+
 def payload(params, image_data_url=None):
+    if params.get("kind") == "image":
+        body = {"prompt": params["prompt"], "num_images": 1, "enable_safety_checker": True, "output_format": "png"}
+        if image_data_url:
+            body["image_url"] = image_data_url
+        else:
+            body["image_size"] = IMAGE_SIZES[params["aspect_ratio"]]
+        return body
     body = {
         "prompt": params["prompt"],
         "num_frames": params["num_frames"],
@@ -116,12 +153,16 @@ def payload(params, image_data_url=None):
     return body
 
 
-def status_url(params_or_task, request_id):
-    return "%s/%s/requests/%s/status" % (QUEUE_BASE, APP_PREFIX, request_id)
+def _app(model):
+    return "/".join((model or APP_PREFIX).split("/")[:2])
 
 
-def result_url(request_id):
-    return "%s/%s/requests/%s" % (QUEUE_BASE, APP_PREFIX, request_id)
+def status_url(model, request_id):
+    return "%s/%s/requests/%s/status" % (QUEUE_BASE, _app(model), request_id)
+
+
+def result_url(request_id, model=None):
+    return "%s/%s/requests/%s" % (QUEUE_BASE, _app(model), request_id)
 
 
 def video_url(body):
@@ -130,4 +171,7 @@ def video_url(body):
     video = body.get("video")
     if isinstance(video, dict):
         return video.get("url")
+    images = body.get("images")
+    if isinstance(images, list) and images and isinstance(images[0], dict):
+        return images[0].get("url")
     return None

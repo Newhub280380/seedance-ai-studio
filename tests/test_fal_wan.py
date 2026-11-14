@@ -117,3 +117,40 @@ class FalWanTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FalFluxTest(unittest.TestCase):
+    """MOCKED FLUX image route. Nothing is generated."""
+
+    def setUp(self):
+        self.data = ROOT / "director-data-test-flux"
+        shutil.rmtree(self.data, ignore_errors=True)
+        self.fal = MockTransport()
+        self.app = DirectorApp(ROOT, self.data, MockTransport(), MockTransport(), fal_api_key="mock-fal-key", fal_transport=self.fal)
+
+    def tearDown(self):
+        shutil.rmtree(self.data, ignore_errors=True)
+
+    def test_text_to_image_then_download(self):
+        self.fal.when("/fal-ai/flux/dev", Result(200, {"request_id": "img1"}))
+        task = self.app.create_task({"capability": "image.fal_flux", "client_request_id": "f1", "prompt": "мем с котом", "aspect_ratio": "1:1", "confirm": True})
+        self.assertEqual(task["status"], "queued")
+        body = json_of(self.fal.calls[0])
+        self.assertEqual(body["image_size"], "square_hd")
+        self.assertEqual(task["fal_status_url"], "https://queue.fal.run/fal-ai/flux/requests/img1/status")
+        self.fal.routes = []
+        self.fal.calls = []
+        self.fal.when("/requests/img1/status", Result(200, {"status": "COMPLETED"}))
+        self.fal.when("/requests/img1", Result(200, {"images": [{"url": "https://v3.fal.media/files/a.png"}]}))
+        self.fal.when("v3.fal.media", Result(200, b"MOCK-PNG", "image/png"))
+        done = self.app.poll(task["id"])
+        self.assertEqual(done["status"], "completed")
+        self.assertEqual(self.app.read_result(task["id"]), (b"MOCK-PNG", "image/png"))
+
+    def test_photo_goes_to_kontext_edit(self):
+        asset = self.app.put_asset_json({"content_base64": PNG_B64, "media_type": "image/png"})
+        self.fal.when("/fal-ai/flux-kontext/dev", Result(200, {"request_id": "img2"}))
+        self.app.create_task({"capability": "image.fal_flux", "client_request_id": "f2", "prompt": "карточка товара на белом фоне", "original_asset_id": asset["id"], "confirm": True})
+        body = json_of(self.fal.calls[0])
+        self.assertTrue(body["image_url"].startswith("data:image/png;base64,"))
+        self.assertNotIn("image_size", body)

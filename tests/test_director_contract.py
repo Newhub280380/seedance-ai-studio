@@ -89,7 +89,7 @@ class DirectorContractTest(unittest.TestCase):
     def test_skill_hashes_and_curated_catalog_not_full_list(self):
         payload = self.app.capabilities()
         self.assertEqual(payload["catalog"]["full_catalog_counts_this_fetch"]["video"], 138)
-        self.assertLess(len(payload["capabilities"]), 30)
+        self.assertLess(len(payload["capabilities"]), 32)
         skills = [item for item in payload["capabilities"] if item["id"] == "image.create"][0]["skills"]
         self.assertTrue(all(skill["sha256_ok"] and not skill["missing_endpoints"] for skill in skills))
         self.assertTrue(all(skill["executes_backend"] is False for skill in skills))

@@ -373,7 +373,7 @@ class DirectorApp:
             return self._run_studio(task, spec)
         if kind == "plan":
             return self._run_plan(task)
-        if kind == "video_fal":
+        if kind in ("video_fal", "image_fal"):
             return self._run_fal(task)
         raise DirectorRefusal("not_executable", "This capability has no executor", 409)
 
@@ -751,8 +751,8 @@ class DirectorApp:
             task["error"] = {"code": "provider_rejected", "message": _error_text(result, body)}
             return self.store.save(task)
         task["provider_task_id"] = request_id
-        task["fal_status_url"] = body.get("status_url") or fal_route.status_url(task, request_id)
-        task["fal_response_url"] = body.get("response_url") or fal_route.result_url(request_id)
+        task["fal_status_url"] = body.get("status_url") or fal_route.status_url(params["model"], request_id)
+        task["fal_response_url"] = body.get("response_url") or fal_route.result_url(request_id, params["model"])
         task["status"] = "queued"
         task["error"] = None
         return self.store.save(task)
@@ -862,6 +862,11 @@ class DirectorApp:
 
     def _prepare(self, spec, body):
         kind = spec["kind"]
+        if kind == "image_fal":
+            asset = body.get("original_asset_id")
+            if asset:
+                self._one_asset(asset)
+            return fal_route.prepare_image(body, self._prompt(body, fal_route.PROMPT_LIMIT), asset or None)
         if kind == "video_fal":
             asset = body.get("original_asset_id")
             if asset:
@@ -2371,6 +2376,7 @@ class DirectorApp:
         max_spec = hosted_max_spec()
         return [
             dict(fal_route.SPEC),
+            dict(fal_route.IMAGE_SPEC),
             {"id": "image.create", "title": "Создать изображение", "provider": "venice", "kind": "image_generate", "skills": ["venice-create-image", "venice-models"], "endpoint": "POST /api/v1/image/generate", "docs": "https://docs.venice.ai/api-reference/endpoint/image/generate", "models": ["flux-2-pro", "venice-sd35"], "default_model": "flux-2-pro"},
             {"id": "image.edit", "title": "Править одно изображение", "provider": "venice", "kind": "image_edit", "skills": ["venice-image-edit"], "endpoint": "POST /api/v1/image/edit", "docs": "https://docs.venice.ai/api-reference/endpoint/image/edit", "models": ["firered-image-edit"], "default_model": "firered-image-edit"},
             {"id": "image.product_multiref", "title": "Товар: оригинал и референсы сцены", "provider": "venice", "kind": "image_product", "skills": ["venice-product-photoshoot", "venice-image-edit"], "endpoint": "POST /api/v1/image/multi-edit", "docs": "https://docs.venice.ai/api-reference/endpoint/image/multi-edit", "models": ["firered-image-edit", "nano-banana-2-edit"], "default_model": "firered-image-edit"},

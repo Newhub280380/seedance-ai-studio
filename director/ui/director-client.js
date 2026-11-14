@@ -115,31 +115,54 @@
       for (var i = 0; i < state.capabilities.length; i++) {
         if (state.capabilities[i].id === "video.fal_wan") wan = state.capabilities[i];
       }
+      // Both fal routes (Wan video, FLUX image) need the same FAL_KEY.
       var ready = wan && wan.readiness && wan.readiness.status === "ready_to_confirm";
       state.assetId = null;
       state.task = null;
       state.clientRequestId = null;
       panel.innerHTML = ""
         + "<h2>Режиссёр <button type='button' class='ghost director-mode' id='directorAdvancedMode'>Расширенный режим</button></h2>"
-        + "<p class='director-note'>Опишите идею одной фразой — получится видео на 5 секунд (модель Wan 2.2). "
-        + "Можно добавить своё фото: оно оживёт по вашему описанию.</p>"
+        + "<p class='director-note'>Опишите идею одной фразой. Видео делает модель Wan 2.2 (5 секунд), картинки, мемы и карточки товара — FLUX. "
+        + "Можно добавить своё фото: видео оживит его, картинка изменит его по описанию.</p>"
+        + "<label>Что сделать<select id='simpleWhat'>"
+        + "<option value='video'>Видео 5 с (Wan 2.2) — около $0.40</option>"
+        + "<option value='image'>Картинку (FLUX) — около $0.03</option>"
+        + "<option value='meme'>Мем (FLUX) — около $0.03</option>"
+        + "<option value='card'>Карточку товара (FLUX) — около $0.04</option>"
+        + "</select></label>"
         + (ready ? "" : "<p class='director-note' id='simpleNotReady'><b>Видео пока недоступно:</b> на сервере не задан ключ fal (FAL_KEY).</p>")
         + "<label>Что снять<textarea id='simplePrompt' rows='3' placeholder='Например: девушка в красном платье идёт по осеннему парку, лёгкий ветер'></textarea></label>"
         + "<div class='director-row'>"
         + "<label>Своё фото (необязательно)<input id='simplePhoto' type='file' accept='image/png,image/jpeg,image/webp' /></label>"
         + "<label>Формат<select id='simpleAspect'><option value='9:16'>Вертикально 9:16 (Reels, Stories)</option><option value='16:9'>Горизонтально 16:9</option><option value='1:1'>Квадрат 1:1</option></select></label>"
         + "</div>"
-        + "<label class='director-check'><input id='simpleConfirm' type='checkbox' /> Согласен: один ролик стоит около $0.40 (оплата сервиса fal).</label>"
+        + "<label class='director-check'><input id='simpleConfirm' type='checkbox' /> <span id='simpleCost'>Согласен: один ролик стоит около $0.40 (оплата сервиса fal).</span></label>"
         + "<div class='director-row'><button type='button' class='primary' id='simpleGo'" + (ready ? "" : " disabled") + ">Сделать видео</button></div>"
         + "<p id='simpleStatus' class='director-note' role='status'></p>"
         + "<div id='simpleResult'></div>";
       document.getElementById("directorAdvancedMode").addEventListener("click", function () { setMode("advanced"); });
       document.getElementById("simplePhoto").addEventListener("change", uploadPhoto);
       document.getElementById("simpleGo").addEventListener("click", simpleSubmit);
+      document.getElementById("simpleWhat").addEventListener("change", function () {
+        var what = document.getElementById("simpleWhat").value;
+        var info = SIMPLE_WHAT[what];
+        document.getElementById("simpleGo").textContent = info.button;
+        document.getElementById("simpleCost").textContent = "Согласен: " + info.cost + " (оплата сервиса fal).";
+        state.clientRequestId = null;
+      });
       ["simplePrompt", "simpleAspect"].forEach(function (id) {
         document.getElementById(id).addEventListener("change", function () { state.clientRequestId = null; });
       });
     }
+
+    var SIMPLE_WHAT = {
+      video: { capability: "video.fal_wan", button: "Сделать видео", cost: "один ролик стоит около $0.40" },
+      image: { capability: "image.fal_flux", button: "Сделать картинку", cost: "одна картинка стоит около $0.03" },
+      meme: { capability: "image.fal_flux", button: "Сделать мем", cost: "один мем стоит около $0.03",
+        wrap: function (text) { return "Funny internet meme picture, expressive scene, bold white Impact caption with black outline. Caption and scene: " + text; } },
+      card: { capability: "image.fal_flux", button: "Сделать карточку", cost: "одна карточка стоит около $0.04",
+        wrap: function (text) { return "Professional e-commerce marketplace product card, clean light background, soft studio lighting, product centered, crisp details, room for short headline. " + text; } }
+    };
 
     function simpleStatus(text) {
       var node = document.getElementById("simpleStatus");
@@ -169,13 +192,15 @@
       if (!prompt) { simpleStatus("Напишите, что снять."); return; }
       if (!document.getElementById("simpleConfirm").checked) { simpleStatus("Поставьте галочку согласия — без неё ролик не заказывается."); return; }
       if (!state.clientRequestId) state.clientRequestId = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now());
+      var info = SIMPLE_WHAT[document.getElementById("simpleWhat").value] || SIMPLE_WHAT.video;
+      state.simpleKind = info.capability === "image.fal_flux" ? "image" : "video";
       var body = buildTaskBody({
-        capability: "video.fal_wan",
+        capability: info.capability,
         clientRequestId: state.clientRequestId,
         confirm: true,
-        prompt: prompt,
+        prompt: info.wrap ? info.wrap(prompt) : prompt,
         aspect_ratio: document.getElementById("simpleAspect").value,
-        resolution: "720p",
+        resolution: state.simpleKind === "video" ? "720p" : undefined,
         original_asset_id: state.assetId || undefined
       });
       document.getElementById("simpleGo").disabled = true;
@@ -190,7 +215,7 @@
       draft: "Заказ сохранён, но не отправлен.",
       submitting: "Отправляю заказ…",
       queued: "В очереди на генерацию…",
-      processing: "Видео делается (обычно 1–3 минуты)…",
+      processing: "Делается (видео — обычно 1–3 минуты, картинка — секунды)…",
       completed: "Готово!"
     };
 
@@ -207,8 +232,11 @@
         stopPolling();
         simpleStatus(SIMPLE_TEXT.completed);
         var url = "/api/director/tasks/" + encodeURIComponent(task.id) + "/result";
-        document.getElementById("simpleResult").innerHTML = "<video controls playsinline style='max-width:360px;width:100%;border-radius:14px' src='" + escapeAttr(url) + "'></video>"
-          + "<p><a href='" + escapeAttr(url) + "' download='video-" + escapeAttr(task.id) + ".mp4'>Скачать видео</a></p>";
+        var isImage = task.capability === "image.fal_flux";
+        document.getElementById("simpleResult").innerHTML = (isImage
+          ? "<img alt='Готовая картинка' style='max-width:420px;width:100%;border-radius:14px' src='" + escapeAttr(url) + "' />"
+          : "<video controls playsinline style='max-width:360px;width:100%;border-radius:14px' src='" + escapeAttr(url) + "'></video>")
+          + "<p><a href='" + escapeAttr(url) + "' download='" + (isImage ? "image-" : "video-") + escapeAttr(task.id) + (isImage ? ".png" : ".mp4") + "'>" + (isImage ? "Скачать картинку" : "Скачать видео") + "</a></p>";
         state.clientRequestId = null;
         if (go) go.disabled = false;
         return;
