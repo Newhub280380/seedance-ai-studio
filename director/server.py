@@ -6,7 +6,7 @@ from director.service import DirectorApp
 from director.transport import UrllibTransport
 
 
-def build_app(repo_root, data_dir, venice_transport, minimax_transport, venice_api_key="", minimax_api_key=""):
+def build_app(repo_root, data_dir, venice_transport, minimax_transport, venice_api_key="", minimax_api_key="", fal_api_key=""):
     return DirectorApp(
         repo_root,
         data_dir,
@@ -14,6 +14,7 @@ def build_app(repo_root, data_dir, venice_transport, minimax_transport, venice_a
         minimax_transport,
         venice_api_key=venice_api_key,
         minimax_api_key=minimax_api_key,
+        fal_api_key=fal_api_key,
     )
 
 
@@ -111,10 +112,10 @@ def _view(task):
     return {key: value for key, value in task.items() if key not in hidden}
 
 
-def serve(repo_root, data_dir, host="127.0.0.1", port=8765, venice_api_key="", minimax_api_key=""):
+def serve(repo_root, data_dir, host="127.0.0.1", port=8765, venice_api_key="", minimax_api_key="", fal_api_key=""):
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-    app = build_app(repo_root, data_dir, UrllibTransport(), UrllibTransport(), venice_api_key, minimax_api_key)
+    app = build_app(repo_root, data_dir, UrllibTransport(), UrllibTransport(), venice_api_key, minimax_api_key, fal_api_key)
     handler_api = DirectorHandler(app, repo_root)
 
     class Handler(BaseHTTPRequestHandler):

@@ -14,7 +14,7 @@ from director.catalog_data import load_catalog, max_input_images
 from director.comfy_gate import inspect_templates
 from director.errors import DirectorRefusal, TransportFailure
 from director.h3_lanes import COMMERCIAL, hosted_max_spec, static_lanes
-from director import ltx_route, plan_route, studio_route
+from director import fal_route, ltx_route, plan_route, studio_route
 from director.pngutil import solid_png
 from director.prep_route import (
     ALPHA_BBOX_PAD,
@@ -52,7 +52,7 @@ def _data_url(asset):
 
 
 class DirectorApp:
-    def __init__(self, repo_root, data_dir, venice_transport, minimax_transport, venice_api_key="", minimax_api_key=""):
+    def __init__(self, repo_root, data_dir, venice_transport, minimax_transport, venice_api_key="", minimax_api_key="", fal_api_key="", fal_transport=None):
         self.repo_root = Path(repo_root)
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -69,6 +69,8 @@ class DirectorApp:
         self.minimax_api_key = minimax_api_key or ""
         self.venice = VeniceClient(venice_transport, self.venice_api_key)
         self.minimax = MinimaxClient(minimax_transport, self.minimax_api_key)
+        self.fal_api_key = fal_api_key or ""
+        self.fal = fal_route.FalClient(fal_transport or venice_transport, self.fal_api_key)
         self.venice_transport = venice_transport
         self.minimax_transport = minimax_transport
         self.prep_photo_command = os.environ.get("DIRECTOR_PREP_PHOTO") or "prep_photo"
@@ -104,6 +106,7 @@ class DirectorApp:
             "credentials": {
                 "VENICE_API_KEY": "present" if self.venice_api_key else "missing",
                 "MINIMAX_API_KEY": "present" if self.minimax_api_key else "missing",
+                "FAL_KEY": "present" if self.fal_api_key else "missing",
             },
             "assets": POST_SCHEMA,
             "production_identity": studio_route.PRODUCTION_IDENTITY,
@@ -268,6 +271,8 @@ class DirectorApp:
             return self._poll_venice(task)
         if task["provider"] == "minimax":
             return self._poll_minimax(task)
+        if task["provider"] == "fal":
+            return self._poll_fal(task)
         if task["provider"] == "imagination_studio":
             return self._poll_studio(task)
         task["error"] = {"code": "poll_not_supported", "message": "This lane has no provider poll."}
@@ -368,6 +373,8 @@ class DirectorApp:
             return self._run_studio(task, spec)
         if kind == "plan":
             return self._run_plan(task)
+        if kind == "video_fal":
+            return self._run_fal(task)
         raise DirectorRefusal("not_executable", "This capability has no executor", 409)
 
     def _quote(self, task, spec):
@@ -726,6 +733,63 @@ class DirectorApp:
         task["error"] = {"code": "provider_failed", "message": _error_text(result, body)}
         return self.store.save(task)
 
+    def _run_fal(self, task):
+        params = task["params"]
+        image = None
+        if params.get("image_asset_id"):
+            image = _data_url(self._require_asset(params["image_asset_id"]))
+        task["status"] = "submitting"
+        self.store.save(task)
+        try:
+            result, body = self.fal.submit(params["model"], fal_route.payload(params, image))
+        except TransportFailure as exc:
+            return self._transport_failed(task, exc)
+        task.setdefault("provider_calls", []).append({"method": "POST", "path": params["model"], "status": result.status})
+        request_id = body.get("request_id") if isinstance(body, dict) else None
+        if result.status not in (200, 201, 202) or not request_id:
+            task["status"] = "failed"
+            task["error"] = {"code": "provider_rejected", "message": _error_text(result, body)}
+            return self.store.save(task)
+        task["provider_task_id"] = request_id
+        task["fal_status_url"] = body.get("status_url") or fal_route.status_url(task, request_id)
+        task["fal_response_url"] = body.get("response_url") or fal_route.result_url(request_id)
+        task["status"] = "queued"
+        task["error"] = None
+        return self.store.save(task)
+
+    def _poll_fal(self, task):
+        try:
+            result, body = self.fal.get(task["fal_status_url"])
+        except TransportFailure as exc:
+            task["error"] = {"code": "poll_failed", "message": str(exc)}
+            return self.store.save(task)
+        status = body.get("status") if isinstance(body, dict) else None
+        task.setdefault("provider_calls", []).append({"path": "requests/{id}/status", "status": result.status})
+        task["provider_status"] = status
+        if result.status in (200, 202) and status in ("IN_QUEUE", "IN_PROGRESS"):
+            task["status"] = "processing" if status == "IN_PROGRESS" else "queued"
+            task["error"] = None
+            return self.store.save(task)
+        if result.status == 200 and status == "COMPLETED":
+            try:
+                done, payload = self.fal.get(task["fal_response_url"])
+            except TransportFailure as exc:
+                task["error"] = {"code": "poll_failed", "message": str(exc)}
+                return self.store.save(task)
+            url = fal_route.video_url(payload)
+            task["download_url"] = url
+            if done.status != 200 or not url:
+                task["status"] = "failed"
+                task["error"] = {"code": "missing_download_url", "message": _error_text(done, payload)}
+                return self.store.save(task)
+            return self._download_url(task, url)
+        if result.status == 429:
+            task["error"] = {"code": "rate_limited", "message": "Poll was rate limited. The job was not submitted again."}
+            return self.store.save(task)
+        task["status"] = "failed"
+        task["error"] = {"code": "provider_failed", "message": _error_text(result, body)}
+        return self.store.save(task)
+
     def _poll_minimax(self, task):
         try:
             result, body = self.minimax.get("/v2/query/video_generation/" + task["provider_task_id"])
@@ -776,7 +840,12 @@ class DirectorApp:
         task["download_fetched"] = True
         self.store.save(task)
         try:
-            result = self.minimax.get_absolute(url) if task["provider"] == "minimax" else self.venice.transport.request("GET", url, {}, None, 30)
+            if task["provider"] == "minimax":
+                result = self.minimax.get_absolute(url)
+            elif task["provider"] == "fal":
+                result = self.fal.download(url)
+            else:
+                result = self.venice.transport.request("GET", url, {}, None, 30)
         except TransportFailure as exc:
             task["status"] = "completed_remote"
             task["error"] = {"code": "download_failed", "message": str(exc) + " The provider task was not submitted again."}
@@ -793,6 +862,11 @@ class DirectorApp:
 
     def _prepare(self, spec, body):
         kind = spec["kind"]
+        if kind == "video_fal":
+            asset = body.get("original_asset_id")
+            if asset:
+                self._one_asset(asset)
+            return fal_route.prepare(body, self._prompt(body, fal_route.PROMPT_LIMIT), asset or None)
         if kind == "image_generate":
             return self._prepare_image(body)
         if kind == "image_edit":
@@ -2227,6 +2301,8 @@ class DirectorApp:
             raise DirectorRefusal("credential_missing", "VENICE_API_KEY is not set on the server. Nothing was sent.")
         if provider == "minimax" and not self.minimax_api_key:
             raise DirectorRefusal("credential_missing", "MINIMAX_API_KEY is not set on the server. Nothing was sent.")
+        if provider == "fal" and not self.fal_api_key:
+            raise DirectorRefusal("credential_missing", "FAL_KEY is not set on the server. Nothing was sent.")
 
     def _blank(self, body, spec):
         return {
@@ -2294,6 +2370,7 @@ class DirectorApp:
     def _specs(self):
         max_spec = hosted_max_spec()
         return [
+            dict(fal_route.SPEC),
             {"id": "image.create", "title": "Создать изображение", "provider": "venice", "kind": "image_generate", "skills": ["venice-create-image", "venice-models"], "endpoint": "POST /api/v1/image/generate", "docs": "https://docs.venice.ai/api-reference/endpoint/image/generate", "models": ["flux-2-pro", "venice-sd35"], "default_model": "flux-2-pro"},
             {"id": "image.edit", "title": "Править одно изображение", "provider": "venice", "kind": "image_edit", "skills": ["venice-image-edit"], "endpoint": "POST /api/v1/image/edit", "docs": "https://docs.venice.ai/api-reference/endpoint/image/edit", "models": ["firered-image-edit"], "default_model": "firered-image-edit"},
             {"id": "image.product_multiref", "title": "Товар: оригинал и референсы сцены", "provider": "venice", "kind": "image_product", "skills": ["venice-product-photoshoot", "venice-image-edit"], "endpoint": "POST /api/v1/image/multi-edit", "docs": "https://docs.venice.ai/api-reference/endpoint/image/multi-edit", "models": ["firered-image-edit", "nano-banana-2-edit"], "default_model": "firered-image-edit"},
@@ -2376,7 +2453,7 @@ class DirectorApp:
 
     def _public_capability(self, spec):
         problems = skills_ready(self.skills, spec.get("skills") or []) if spec.get("provider") == "venice" else []
-        key_ok = (spec.get("provider") != "venice" or bool(self.venice_api_key)) and (spec.get("provider") != "minimax" or bool(self.minimax_api_key))
+        key_ok = (spec.get("provider") != "venice" or bool(self.venice_api_key)) and (spec.get("provider") != "minimax" or bool(self.minimax_api_key)) and (spec.get("provider") != "fal" or bool(self.fal_api_key))
         if spec.get("provider") == "local_brain":
             status = "ready_to_confirm" if _brain_public(self.brain_url, self.brain_model)["configured"] else "brain_not_configured"
         elif spec.get("provider") == "local_prep":
@@ -2418,6 +2495,8 @@ class DirectorApp:
             "origin": spec.get("origin"),
             "resolutions": spec.get("resolutions"),
             "resolutions_rejected": spec.get("resolutions_rejected"),
+            "aspect_ratios": spec.get("aspect_ratios"),
+            "durations": spec.get("durations"),
             "camera_trajectory": spec.get("camera_trajectory", spec["id"] == "video.venice_camera"),
             "commercial_runtime": spec.get("commercial_runtime"),
             "temporal_edit": spec.get("temporal_edit"),

@@ -28,7 +28,16 @@
     var button = document.getElementById("directorBtn");
     var panel = document.getElementById("directorPanel");
     if (!button || !panel) return;
-    var state = { capabilities: [], selected: "", assetId: null, references: [], clientRequestId: null, task: null };
+    var state = { capabilities: [], selected: "", assetId: null, references: [], clientRequestId: null, task: null, payload: null, pollTimer: null };
+    var MODE_KEY = "director_mode";
+    function mode() {
+      try { return window.localStorage.getItem(MODE_KEY) === "advanced" ? "advanced" : "simple"; } catch (e) { return "simple"; }
+    }
+    function setMode(value) {
+      try { window.localStorage.setItem(MODE_KEY, value); } catch (e) { /* private mode */ }
+      stopPolling();
+      if (value === "advanced") render(state.payload || {}); else renderSimple();
+    }
     button.addEventListener("click", function () {
       setOpen(true);
       load();
@@ -53,7 +62,8 @@
         return response.json();
       }).then(function (payload) {
         state.capabilities = payload.capabilities || [];
-        render(payload);
+        state.payload = payload;
+        if (mode() === "advanced") render(payload); else renderSimple();
       }).catch(function () {
         panel.innerHTML = "<h2>Режиссёр</h2><p class='director-note'>Локальный сервер не запущен. Галерея промтов работает как раньше. Запуск: <code>python -m director</code> из корня репозитория, затем открыть эту страницу с того же сервера. Ключи только в окружении сервера.</p>";
       });
@@ -65,7 +75,7 @@
         return "<option value='" + escapeAttr(item.id) + "'" + (item.id === state.selected ? " selected" : "") + ">" + escapeText(item.title) + " — " + escapeText(status) + "</option>";
       }).join("");
       panel.innerHTML = ""
-        + "<h2>Режиссёр</h2>"
+        + "<h2>Режиссёр <button type='button' class='ghost director-mode' id='directorSimpleMode'>Простой режим</button></h2>"
         + "<p class='director-note'>Сервер не создаёт медиа сам. Отправка провайдеру начинается только после подтверждения и только если на сервере есть ключ. Снимок каталога: " + escapeText((payload.catalog && payload.catalog.fetched_at) || "нет") + ". Полный каталог в интерфейс не загружен.</p>"
         + "<label>Функция<select id='directorCapability'>" + options + "</select></label>"
         + "<div id='directorReadiness' class='director-note'></div>"
@@ -90,11 +100,139 @@
         state.clientRequestId = null;
         showSelected();
       });
+      document.getElementById("directorSimpleMode").addEventListener("click", function () { setMode("simple"); });
       document.getElementById("directorFixture").addEventListener("click", addFixture);
       document.getElementById("directorSubmit").addEventListener("click", submit);
       document.getElementById("directorPoll").addEventListener("click", function () { act("poll"); });
       document.getElementById("directorCancel").addEventListener("click", function () { act("cancel"); });
       showSelected();
+    }
+
+    // Простой режим для клиента: одна фраза (и при желании своё фото) -> ролик 5 с на Wan 2.2.
+    // Всё техническое (модели, JSON, опрос) спрятано; расширенный режим остаётся по кнопке.
+    function renderSimple() {
+      var wan = null;
+      for (var i = 0; i < state.capabilities.length; i++) {
+        if (state.capabilities[i].id === "video.fal_wan") wan = state.capabilities[i];
+      }
+      var ready = wan && wan.readiness && wan.readiness.status === "ready_to_confirm";
+      state.assetId = null;
+      state.task = null;
+      state.clientRequestId = null;
+      panel.innerHTML = ""
+        + "<h2>Режиссёр <button type='button' class='ghost director-mode' id='directorAdvancedMode'>Расширенный режим</button></h2>"
+        + "<p class='director-note'>Опишите идею одной фразой — получится видео на 5 секунд (модель Wan 2.2). "
+        + "Можно добавить своё фото: оно оживёт по вашему описанию.</p>"
+        + (ready ? "" : "<p class='director-note' id='simpleNotReady'><b>Видео пока недоступно:</b> на сервере не задан ключ fal (FAL_KEY).</p>")
+        + "<label>Что снять<textarea id='simplePrompt' rows='3' placeholder='Например: девушка в красном платье идёт по осеннему парку, лёгкий ветер'></textarea></label>"
+        + "<div class='director-row'>"
+        + "<label>Своё фото (необязательно)<input id='simplePhoto' type='file' accept='image/png,image/jpeg,image/webp' /></label>"
+        + "<label>Формат<select id='simpleAspect'><option value='9:16'>Вертикально 9:16 (Reels, Stories)</option><option value='16:9'>Горизонтально 16:9</option><option value='1:1'>Квадрат 1:1</option></select></label>"
+        + "</div>"
+        + "<label class='director-check'><input id='simpleConfirm' type='checkbox' /> Согласен: один ролик стоит около $0.40 (оплата сервиса fal).</label>"
+        + "<div class='director-row'><button type='button' class='primary' id='simpleGo'" + (ready ? "" : " disabled") + ">Сделать видео</button></div>"
+        + "<p id='simpleStatus' class='director-note' role='status'></p>"
+        + "<div id='simpleResult'></div>";
+      document.getElementById("directorAdvancedMode").addEventListener("click", function () { setMode("advanced"); });
+      document.getElementById("simplePhoto").addEventListener("change", uploadPhoto);
+      document.getElementById("simpleGo").addEventListener("click", simpleSubmit);
+      ["simplePrompt", "simpleAspect"].forEach(function (id) {
+        document.getElementById(id).addEventListener("change", function () { state.clientRequestId = null; });
+      });
+    }
+
+    function simpleStatus(text) {
+      var node = document.getElementById("simpleStatus");
+      if (node) node.textContent = text;
+    }
+
+    function uploadPhoto(event) {
+      var file = event.target.files && event.target.files[0];
+      state.assetId = null;
+      state.clientRequestId = null;
+      if (!file) return;
+      var reader = new FileReader();
+      reader.onload = function () {
+        var base64 = String(reader.result).split(",")[1] || "";
+        simpleStatus("Загружаю фото…");
+        postJson("/api/director/assets", { content_base64: base64, media_type: file.type || "image/jpeg" }).then(function (payload) {
+          if (payload.ok === false) { simpleStatus("Фото не принято: " + ((payload.error && payload.error.message) || "ошибка")); return; }
+          state.assetId = payload.asset && payload.asset.id;
+          simpleStatus("Фото загружено — ролик будет сделан по нему.");
+        }).catch(function () { simpleStatus("Не удалось загрузить фото."); });
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function simpleSubmit() {
+      var prompt = document.getElementById("simplePrompt").value.trim();
+      if (!prompt) { simpleStatus("Напишите, что снять."); return; }
+      if (!document.getElementById("simpleConfirm").checked) { simpleStatus("Поставьте галочку согласия — без неё ролик не заказывается."); return; }
+      if (!state.clientRequestId) state.clientRequestId = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now());
+      var body = buildTaskBody({
+        capability: "video.fal_wan",
+        clientRequestId: state.clientRequestId,
+        confirm: true,
+        prompt: prompt,
+        aspect_ratio: document.getElementById("simpleAspect").value,
+        resolution: "720p",
+        original_asset_id: state.assetId || undefined
+      });
+      document.getElementById("simpleGo").disabled = true;
+      simpleStatus("Отправляю заказ…");
+      postJson("/api/director/tasks", body).then(simpleTrack).catch(function () {
+        simpleStatus("Сервер не ответил. Повторное нажатие не создаст второй заказ.");
+        document.getElementById("simpleGo").disabled = false;
+      });
+    }
+
+    var SIMPLE_TEXT = {
+      draft: "Заказ сохранён, но не отправлен.",
+      submitting: "Отправляю заказ…",
+      queued: "В очереди на генерацию…",
+      processing: "Видео делается (обычно 1–3 минуты)…",
+      completed: "Готово!"
+    };
+
+    function simpleTrack(payload) {
+      var task = payload && payload.task;
+      var go = document.getElementById("simpleGo");
+      if (!task) {
+        simpleStatus("Не принято: " + ((payload && payload.error && payload.error.message) || "ошибка"));
+        if (go) go.disabled = false;
+        return;
+      }
+      state.task = task;
+      if (task.status === "completed") {
+        stopPolling();
+        simpleStatus(SIMPLE_TEXT.completed);
+        var url = "/api/director/tasks/" + encodeURIComponent(task.id) + "/result";
+        document.getElementById("simpleResult").innerHTML = "<video controls playsinline style='max-width:360px;width:100%;border-radius:14px' src='" + escapeAttr(url) + "'></video>"
+          + "<p><a href='" + escapeAttr(url) + "' download='video-" + escapeAttr(task.id) + ".mp4'>Скачать видео</a></p>";
+        state.clientRequestId = null;
+        if (go) go.disabled = false;
+        return;
+      }
+      if (["queued", "processing", "submitting"].indexOf(task.status) >= 0) {
+        simpleStatus(SIMPLE_TEXT[task.status]);
+        schedulePoll(task.id);
+        return;
+      }
+      stopPolling();
+      simpleStatus("Не получилось: " + ((task.error && (task.error.message || task.error.code)) || task.status) + ". Деньги за повтор той же заявки не спишутся.");
+      if (go) go.disabled = false;
+    }
+
+    function schedulePoll(id) {
+      stopPolling();
+      state.pollTimer = window.setTimeout(function () {
+        postJson("/api/director/tasks/" + encodeURIComponent(id) + "/poll", {}).then(simpleTrack).catch(function () { schedulePoll(id); });
+      }, 5000);
+    }
+
+    function stopPolling() {
+      if (state.pollTimer) window.clearTimeout(state.pollTimer);
+      state.pollTimer = null;
     }
 
     function selected() {
@@ -119,9 +257,11 @@
       if (constraints && constraints.aspect_ratios && constraints.aspect_ratios.length) limits += " Допустимые соотношения: " + constraints.aspect_ratios.join(", ") + ".";
       if (constraints && constraints.durations) limits += " Длительности: " + constraints.durations.join(", ") + ".";
       if (item.resolutions) limits += " Разрешения: " + item.resolutions.join(", ") + ".";
-      var ratios = (constraints && (constraints.aspectRatios || constraints.aspect_ratios)) || [];
+      if (item.aspect_ratios) limits += " Допустимые соотношения: " + item.aspect_ratios.join(", ") + ".";
+      if (item.durations) limits += " Длительности: " + item.durations.join(", ") + " с.";
+      var ratios = (constraints && (constraints.aspectRatios || constraints.aspect_ratios)) || item.aspect_ratios || [];
       fillDefault("directorAspect", ratios, ratios.indexOf("9:16") >= 0 ? "9:16" : ratios[0]);
-      var durations = (constraints && constraints.durations) || [];
+      var durations = (constraints && constraints.durations) || item.durations || [];
       fillDefault("directorDuration", durations, durations[0]);
       fillDefault("directorResolution", item.resolutions || [], (item.resolutions || [])[0]);
       node.textContent = "Готовность: " + ((item.readiness && item.readiness.status) || "unknown")
