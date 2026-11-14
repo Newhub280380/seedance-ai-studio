@@ -118,6 +118,7 @@
       <div class="eyebrow">Library</div>
       <nav class="nav" id="nav"></nav>
       <div class="nav"><button type="button" id="directorBtn">▣ Режиссёр</button></div>
+      <div class="nav"><button type="button" id="freefieldBtn">▦ Приложения</button></div>
       <div class="sidebar-note"><strong>Твоя идея → визуал</strong>Выбери карточку, скопируй промт, вставь в «Режиссёр 1.0» вместе со своим фото — и получи готовый результат.</div>
     </aside>
     <main class="main">
@@ -129,6 +130,7 @@
         </div>
       </header>
       <section class="director hidden" id="directorPanel"></section>
+      <section class="director hidden" id="freefieldPanel"></section>
       <section class="hero" id="hero">
         <div>
           <h1>Огромная библиотека,<br><span>готовая к генерации.</span></h1>
@@ -157,6 +159,7 @@
     </div>
   </div>
   <script src="director/ui/director-client.js"></script>
+  <script src="director/ui/freefield-client.js"></script>
   <script>
     const categories=[
       ['all','Все идеи','✦'],
