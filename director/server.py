@@ -1,7 +1,7 @@
 import json
 from urllib.parse import urlparse
 
-from director import freefield_route
+from director import freefield_route, middle_route
 from director.errors import DirectorRefusal
 from director.service import DirectorApp
 from director.transport import UrllibTransport
@@ -39,6 +39,9 @@ class DirectorHandler:
             freefield = freefield_route.handle(self.app, method, route, body)
             if freefield is not None:
                 return freefield
+            middle = middle_route.handle(self.app, method, route, body, parsed.query)
+            if middle is not None:
+                return middle
             if method == "GET" and route == "/api/director/capabilities":
                 return 200, self.app.capabilities(), "application/json"
             if method == "GET" and route == "/api/director/tasks":
