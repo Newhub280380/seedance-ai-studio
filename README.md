@@ -133,6 +133,10 @@ curl -sS -X POST http://127.0.0.1:8765/api/director/tasks/<edit-id>/poll -H 'Con
 
 Модель правки по умолчанию — Qwen-Image-2.1-Turbo (`image_model` `qwen`), скрипт Studio `scripts/edit.sh`. H3 для неё не нужен. Необязательные модели того же маршрута: `qwen-full` (`--image-edit`), `flux3k-fast` и `flux3k-full` (`--flux3`), `moss-image` (`--moss`). Видео по `<Picture 1>` требует MiniMax H3 Ref2VA (`oneshot-setup.sh --ref2va` или `oneshot-setup-spark.sh --ref2va` на CUDA) и не заменяет правку картинки. Дымовая длина этого видео — 5, 8, 10 или 15 секунд. 120 секунд сюда не принимаются и готовым роликом не считаются: `completed` только если Studio вернул файл и Director его проверил.
 
+## Прослойка: лист, кадры, карточка запуска
+
+`POST /api/director/middle/plan` принимает одно фото, одно референс-видео и короткую фразу. В ответ план: лист персонажа `@имя` (до 16 фото, 8 ракурсов, картинки не рисуются), режим `edit` (`sourceVideo`) или `reference` (только движение), три кадра first/key/last, два прохода манекена, промпт в порядке preserve → replace → integrate, черновик 480p и нарезка около 15 с, карточка модели и оценки. `render_started` остаётся false. `POST /api/director/middle/approve` с `gate` = `sheet`, затем `frames`, затем `launch`. Карточка живёт 15 минут. `GET /api/director/middle/trends?q=` ищет по каталогу настроек без текстов чужих промптов.
+
 ## План на 120 секунд без рендера
 
 Отдельного режиссёра нет. `POST /api/slate/direct` по-прежнему не вызывается. `director.plan` один раз спрашивает уже запущенный локальный OpenAI-совместимый мозг: `POST $DIRECTOR_BRAIN_URL/chat/completions`. Адрес в коде не зашит. Пока переменные пусты, план не выдумывается.
